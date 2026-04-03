@@ -1,14 +1,12 @@
 mod config;
-// Stub these for now
-// mod wayland;
-// mod renderer;
+mod wayland;
+// mod renderer; 
 
 use anyhow::Result;
-use tracing::{info, error};
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
-    // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -18,7 +16,6 @@ fn main() -> Result<()> {
 
     info!("Starting depthpaper daemon...");
 
-    // Load configuration
     let cfg = match config::Config::load() {
         Ok(c) => c,
         Err(e) => {
@@ -29,8 +26,20 @@ fn main() -> Result<()> {
 
     info!(?cfg, "Configuration loaded successfully");
 
-    // let mut app = wayland::App::new(cfg)?;
-    // app.run()
+    let mut app = match wayland::App::new(cfg) {
+        Ok(a) => a,
+        Err(e) => {
+            error!("Failed to initialize Wayland application: {:#}", e);
+            return Err(e);
+        }
+    };
+
+    info!("Wayland surfaces initialized. Entering event loop...");
+
+    if let Err(e) = app.run() {
+        error!("Application error during run: {:#}", e);
+        return Err(e);
+    }
 
     Ok(())
 }
