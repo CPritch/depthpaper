@@ -14,7 +14,7 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-backend = { version = "0.3", features = ["client_system"] }
 
 # Rendering
-wgpu = "23" 
+wgpu = "23"
 raw-window-handle = "0.6"
 bytemuck = { version = "1", features = ["derive"] }
 
@@ -24,6 +24,11 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 # Config
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+
+# Depth estimation
+ort = "2.0.0-rc.12"
+blake3 = "1"
+serde_json = "1"
 
 # Event loop
 calloop = "0.14"

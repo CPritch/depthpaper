@@ -394,14 +394,38 @@ impl LayerShellHandler for App {
 
             surface.configure(&renderer.device, &surface_config);
 
+            // Load wallpaper and optionally run depth estimation
             let wallpaper_path = self.config.wallpaper_for(&output_name).to_path_buf();
-            let bind_group = match renderer.load_wallpaper(&wallpaper_path) {
-                Ok(bg) => bg,
+
+            // Load color texture
+            let color_view = match renderer.load_wallpaper_texture(&wallpaper_path) {
+                Ok(v) => v,
                 Err(e) => {
                     warn!("failed to load wallpaper: {e:#}");
                     return;
                 }
             };
+
+            // Try to produce a depth map if a model is configured
+            let depth_view_owned;
+            let depth_view_ref = if let Some(model_path) = &self.config.general.model_path {
+                match crate::depth::get_depth_map(&wallpaper_path, model_path) {
+                    Ok(depth) => {
+                        let (_tex, view) = renderer.upload_depth_map(&depth);
+                        depth_view_owned = view;
+                        &depth_view_owned
+                    }
+                    Err(e) => {
+                        warn!("depth estimation failed, using flat wallpaper: {e:#}");
+                        &renderer.depth_view
+                    }
+                }
+            } else {
+                debug!("no model_path configured, skipping depth estimation");
+                &renderer.depth_view
+            };
+
+            let bind_group = renderer.create_bind_group(&color_view, depth_view_ref);
 
             let render_state = OutputRenderState {
                 surface,

@@ -1,5 +1,5 @@
 mod config;
-// mod depth;
+mod depth;
 mod renderer;
 mod wayland;
 
