@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Depth map at the wallpaper's native resolution.
 /// Values are normalized to [0.0, 1.0] where 1.0 = closest to camera.

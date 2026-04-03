@@ -20,7 +20,7 @@ pub struct Renderer {
     pub pipeline: wgpu::RenderPipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub sampler: wgpu::Sampler,
-    pub depth_placeholder: wgpu::Texture,
+    _depth_placeholder: wgpu::Texture,
     pub depth_view: wgpu::TextureView,
     pub uniform_buffer: wgpu::Buffer,
 }
@@ -170,10 +170,16 @@ impl Renderer {
             pipeline,
             bind_group_layout,
             sampler,
-            depth_placeholder,
+            _depth_placeholder: depth_placeholder,
             depth_view,
             uniform_buffer,
         })
+    }
+
+    /// Update the uniform buffer with new cursor offset and intensity.
+    pub fn update_uniforms(&self, offset_x: f32, offset_y: f32, intensity: f32) {
+        let data = [offset_x, offset_y, intensity, 0.0f32];
+        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&data));
     }
 
     /// Upload a depth map as a GPU texture. Returns the texture and view.
