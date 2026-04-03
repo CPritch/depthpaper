@@ -1,44 +1,68 @@
 mod config;
+// mod depth;
+mod renderer;
 mod wayland;
-mod renderer; 
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
+use wayland_client::Connection;
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("depthpaper=debug")),
+                .unwrap_or_else(|_| EnvFilter::new("depthpaper=info")),
         )
         .init();
 
-    info!("Starting depthpaper daemon...");
+    info!("starting depthpaper");
 
-    let cfg = match config::Config::load() {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Failed to load configuration: {:#}", e);
-            return Err(e);
+    let cfg = config::Config::load()?;
+    info!(?cfg, "configuration loaded");
+
+    let conn = Connection::connect_to_env()
+        .context("failed to connect to Wayland display")?;
+
+    let (globals, mut event_queue) =
+        wayland_client::globals::registry_queue_init::<wayland::App>(&conn)
+            .context("failed to init Wayland registry")?;
+
+    let qh = event_queue.handle();
+    let mut app = wayland::App::new(cfg, &globals, &qh)?;
+
+    // Discover outputs and create surfaces
+    event_queue.roundtrip(&mut app)?;
+    event_queue.roundtrip(&mut app)?;
+    app.ensure_layer_surfaces(&qh);
+    event_queue.roundtrip(&mut app)?;
+    event_queue.roundtrip(&mut app)?;
+
+    if app.render_targets.is_empty() {
+        error!("no render targets initialized");
+        for (i, o) in app.outputs.iter().enumerate() {
+            error!(
+                idx = i,
+                name = o.name,
+                has_layer = o.layer_surface.is_some(),
+                configured = o.configured,
+                "output state"
+            );
         }
-    };
+        anyhow::bail!("failed to initialize any outputs");
+    }
 
-    info!(?cfg, "Configuration loaded successfully");
+    info!(
+        outputs = app.outputs.len(),
+        render_targets = app.render_targets.len(),
+        "entering main loop"
+    );
 
-    let mut app = match wayland::App::new(cfg) {
-        Ok(a) => a,
-        Err(e) => {
-            error!("Failed to initialize Wayland application: {:#}", e);
-            return Err(e);
-        }
-    };
+    app.render_all(&qh);
 
-    info!("Wayland surfaces initialized. Entering event loop...");
-
-    if let Err(e) = app.run() {
-        error!("Application error during run: {:#}", e);
-        return Err(e);
+    while app.running {
+        event_queue.blocking_dispatch(&mut app)?;
+        app.render_all(&qh);
     }
 
     Ok(())
