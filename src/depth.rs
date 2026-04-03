@@ -66,18 +66,21 @@ pub fn get_depth_map(wallpaper_path: &Path, model_path: &Path) -> Result<DepthMa
 
     let raw_depth = run_inference(model_path, &input_data)?;
 
-    // Normalize output to [0, 1]. Depth Anything V2 outputs relative
-    // inverse depth — higher values = closer to camera, which is what
-    // we want for parallax (foreground shifts more).
-    let (d_min, d_max) = raw_depth.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &v| {
+    // Normalize output to [0, 1] with 1.0 = closest to camera.
+    // DA2 outputs inverse depth (higher = closer) — already correct.
+    // DA3 outputs direct depth (higher = farther) — needs inversion.
+    let (d_min, d_max) = raw_depth.data.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &v| {
         (mn.min(v), mx.max(v))
     });
     let range = (d_max - d_min).max(1e-6);
 
-    let normalized: Vec<f32> = raw_depth
-        .iter()
-        .map(|&v| (v - d_min) / range)
-        .collect();
+    let normalized: Vec<f32> = if raw_depth.invert {
+        // DA3: invert so close = 1.0
+        raw_depth.data.iter().map(|&v| 1.0 - (v - d_min) / range).collect()
+    } else {
+        // DA2: already close = high
+        raw_depth.data.iter().map(|&v| (v - d_min) / range).collect()
+    };
 
     // Resize depth from model resolution to wallpaper's native resolution
     let depth_data = resize_depth(
@@ -100,7 +103,13 @@ pub fn get_depth_map(wallpaper_path: &Path, model_path: &Path) -> Result<DepthMa
     Ok(result)
 }
 
-fn run_inference(model_path: &Path, input: &[f32]) -> Result<Vec<f32>> {
+struct InferenceResult {
+    data: Vec<f32>,
+    /// True if output is direct depth (DA3), false if inverse depth (DA2).
+    invert: bool,
+}
+
+fn run_inference(model_path: &Path, input: &[f32]) -> Result<InferenceResult> {
     let mut session = ort::session::Session::builder()
         .map_err(|e| anyhow::anyhow!("failed to create ONNX session builder: {e}"))?
         .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
@@ -119,7 +128,7 @@ fn run_inference(model_path: &Path, input: &[f32]) -> Result<Vec<f32>> {
     // fall back to DA2 format (rank 4: [batch, C, H, W]).
     // Extract data inside each arm so SessionOutputs doesn't hold
     // a borrow on session across the retry.
-    let result: Result<Vec<f32>> = {
+    let result: Result<InferenceResult> = {
         let data: Box<[f32]> = input.to_vec().into_boxed_slice();
         let tensor = ort::value::Tensor::<f32>::from_array((vec![1i64, 1, 3, sz, sz], data))
             .map_err(|e| anyhow::anyhow!("failed to create input tensor: {e}"))?;
@@ -129,7 +138,7 @@ fn run_inference(model_path: &Path, input: &[f32]) -> Result<Vec<f32>> {
                 let (_shape, d) = outputs[0]
                     .try_extract_tensor::<f32>()
                     .map_err(|e| anyhow::anyhow!("failed to extract output: {e}"))?;
-                Ok(d.to_vec())
+                Ok(InferenceResult { data: d.to_vec(), invert: true })
             }
             Err(_) => {
                 debug!("rank-5 failed, retrying with rank-4 input (DA2)");
@@ -153,7 +162,7 @@ fn run_inference(model_path: &Path, input: &[f32]) -> Result<Vec<f32>> {
         .try_extract_tensor::<f32>()
         .map_err(|e| anyhow::anyhow!("failed to extract output: {e}"))?;
 
-    Ok(data.to_vec())
+    Ok(InferenceResult { data: data.to_vec(), invert: false })
 }
 
 /// Bilinear interpolation resize for a single-channel f32 buffer.
