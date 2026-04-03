@@ -1,6 +1,6 @@
 mod config;
 mod wayland;
-// mod renderer; 
+mod renderer; 
 
 use anyhow::Result;
 use tracing::{error, info};

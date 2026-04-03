@@ -16,15 +16,18 @@ use smithay_client_toolkit::{
 };
 use tracing::{debug, info, warn};
 use wayland_client::{
-    globals::GlobalList,
     protocol::{wl_output, wl_surface},
-    Connection, QueueHandle,
+    Connection, QueueHandle, Proxy,
 };
+use std::ptr::NonNull;
+use std::ffi::c_void;
 
 use crate::config::Config;
-// use crate::renderer::Renderer;
+use crate::renderer::Renderer;
+use raw_window_handle::{
+    RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
+};
 
-/// Tracks a single monitor/output and its associated layer surface.
 pub struct OutputInfo {
     pub name: String,
     pub wl_output: wl_output::WlOutput,
@@ -33,6 +36,8 @@ pub struct OutputInfo {
     pub scale: i32,
     pub layer_surface: Option<LayerSurface>,
     pub configured: bool,
+    pub wgpu_surface: Option<wgpu::Surface<'static>>,
+    pub wgpu_config: Option<wgpu::SurfaceConfiguration>,
 }
 
 pub struct App {
@@ -43,7 +48,7 @@ pub struct App {
     pub layer_shell: LayerShell,
     pub shm: Shm,
     pub outputs: Vec<OutputInfo>,
-    // pub renderer: Option<Renderer>,
+    pub renderer: Option<Renderer>,
     pub running: bool,
 }
 
@@ -74,55 +79,17 @@ impl App {
             layer_shell,
             shm,
             outputs: Vec::new(),
-            // renderer: None,
+            renderer: None,
             running: true,
         };
 
-        // Initial roundtrip to discover outputs
         event_queue.roundtrip(&mut app)?;
         info!(count = app.outputs.len(), "discovered outputs");
 
         Ok(app)
     }
 
-    fn create_layer_surfaces(&mut self, qh: &QueueHandle<App>) -> Result<()> {
-        for output in &mut self.outputs {
-            if output.layer_surface.is_some() {
-                continue;
-            }
-
-            let surface = self.compositor_state.create_surface(qh);
-
-            let layer_surface = self.layer_shell.create_layer_surface(
-                qh,
-                surface,
-                Layer::Background,
-                Some("depthpaper"),
-                Some(&output.wl_output),
-            );
-
-            layer_surface.set_anchor(Anchor::all());
-            layer_surface.set_exclusive_zone(-1);
-            layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None);
-            layer_surface.set_size(output.width, output.height);
-            layer_surface.commit();
-
-            debug!(
-                name = output.name,
-                width = output.width,
-                height = output.height,
-                "created layer surface"
-            );
-
-            output.layer_surface = Some(layer_surface);
-        }
-
-        Ok(())
-    }
-
     pub fn run(&mut self) -> Result<()> {
-        // TODO: transition to calloop event loop with cursor polling and signal handling.
-        // For now, block on the Wayland connection to prove surfaces work.
         let conn = Connection::connect_to_env()?;
         let mut event_queue = wayland_client::globals::registry_queue_init::<App>(&conn)?.1;
 
@@ -154,8 +121,7 @@ impl CompositorHandler for App {
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _new_transform: wl_output::Transform,
-    ) {
-    }
+    ) {}
 
     fn frame(
         &mut self,
@@ -163,9 +129,7 @@ impl CompositorHandler for App {
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _time: u32,
-    ) {
-        // TODO: re-render on frame callback
-    }
+    ) {}
 
     fn surface_enter(
         &mut self,
@@ -173,8 +137,7 @@ impl CompositorHandler for App {
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _output: &wl_output::WlOutput,
-    ) {
-    }
+    ) {}
 
     fn surface_leave(
         &mut self,
@@ -182,8 +145,7 @@ impl CompositorHandler for App {
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _output: &wl_output::WlOutput,
-    ) {
-    }
+    ) {}
 }
 
 impl OutputHandler for App {
@@ -197,7 +159,6 @@ impl OutputHandler for App {
         _qh: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
-        // We'll get details in update_output; store a placeholder for now
         let info = OutputInfo {
             name: String::new(),
             wl_output: output,
@@ -206,6 +167,8 @@ impl OutputHandler for App {
             scale: 1,
             layer_surface: None,
             configured: false,
+            wgpu_surface: None,
+            wgpu_config: None, 
         };
         self.outputs.push(info);
     }
@@ -238,7 +201,6 @@ impl OutputHandler for App {
                     layer_surface.set_anchor(Anchor::all());
                     layer_surface.set_exclusive_zone(-1);
                     layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None);
-                    // Let the compositor dictate the size via anchors
                     layer_surface.set_size(0, 0); 
                     layer_surface.commit();
 
@@ -282,6 +244,11 @@ impl LayerShellHandler for App {
         let (w, h) = (configure.new_size.0, configure.new_size.1);
         debug!(w, h, "layer surface configured");
 
+        if self.renderer.is_none() {
+            info!("Initializing wgpu renderer...");
+            self.renderer = Some(pollster::block_on(Renderer::new()).expect("Failed to init wgpu"));
+        }
+
         if let Some(output) = self
             .outputs
             .iter_mut()
@@ -290,10 +257,52 @@ impl LayerShellHandler for App {
             if w > 0 { output.width = w; }
             if h > 0 { output.height = h; }
             output.configured = true;
-            layer.wl_surface().commit();
-        }
 
-        // TODO: init wgpu renderer here once the first surface is configured
+            layer.wl_surface().commit();
+
+            let renderer = self.renderer.as_ref().unwrap();
+            
+            if output.wgpu_surface.is_none() {
+                let display_ptr = _conn.backend().display_ptr() as *mut c_void;
+                let surface_ptr = layer.wl_surface().id().as_ptr() as *mut c_void;
+
+                let display_handle = WaylandDisplayHandle::new(
+                    NonNull::new(display_ptr).expect("Wayland display pointer was null")
+                );
+                
+                let window_handle = WaylandWindowHandle::new(
+                    NonNull::new(surface_ptr).expect("Wayland surface pointer was null")
+                );
+
+                let target = wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle: RawDisplayHandle::Wayland(display_handle),
+                    raw_window_handle: RawWindowHandle::Wayland(window_handle),
+                };
+
+                let surface = unsafe { renderer.instance.create_surface_unsafe(target) }
+                    .expect("Failed to create wgpu surface");
+                
+                output.wgpu_surface = Some(surface);
+            }
+
+            if let Some(surface) = &output.wgpu_surface {
+                let config = wgpu::SurfaceConfiguration {
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    format: wgpu::TextureFormat::Bgra8UnormSrgb,
+                    width: output.width,
+                    height: output.height,
+                    present_mode: wgpu::PresentMode::Fifo,
+                    alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied, 
+                    view_formats: vec![],
+                    desired_maximum_frame_latency: 2,
+                };
+                
+                surface.configure(&renderer.device, &config);
+                output.wgpu_config = Some(config);
+                
+                info!(name = output.name, "Configured wgpu swapchain");
+            }
+        }
     }
 }
 

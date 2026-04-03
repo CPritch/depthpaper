@@ -248,12 +248,14 @@ dependencies = [
  "directories",
  "image",
  "nix",
+ "pollster",
  "raw-window-handle",
  "serde",
  "smithay-client-toolkit",
  "toml",
  "tracing",
  "tracing-subscriber",
+ "wayland-backend",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
@@ -279,6 +281,15 @@ dependencies = [
  "option-ext",
  "redox_users",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "dlib"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
+dependencies = [
+ "libloading",
 ]
 
 [[package]]
@@ -884,6 +895,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pollster"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
+
+[[package]]
 name = "presser"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1013,6 +1030,12 @@ name = "rustversion"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
+
+[[package]]
+name = "scoped-tls"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
 
 [[package]]
 name = "scopeguard"
@@ -1418,6 +1441,7 @@ dependencies = [
  "cc",
  "downcast-rs",
  "rustix",
+ "scoped-tls",
  "smallvec",
  "wayland-sys",
 ]
@@ -1524,6 +1548,8 @@ version = "0.31.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8eab23fefc9e41f8e841df4a9c707e8a8c4ed26e944ef69297184de2785e3be"
 dependencies = [
+ "dlib",
+ "log",
  "pkg-config",
 ]
 
