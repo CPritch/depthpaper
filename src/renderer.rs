@@ -8,6 +8,7 @@ pub struct OutputRenderState {
     pub surface: wgpu::Surface<'static>,
     pub config: wgpu::SurfaceConfiguration,
     pub bind_group: wgpu::BindGroup,
+    pub color_view: wgpu::TextureView,
 }
 
 /// Shared GPU state and pipeline.

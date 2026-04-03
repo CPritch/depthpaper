@@ -1,4 +1,4 @@
-// Depthpaper fullscreen quad shader
+// Depthpaper fullscreen quad shader — depth-based parallax displacement
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -6,7 +6,6 @@ struct VertexOutput {
 };
 
 // Fullscreen triangle from vertex index — no vertex buffers needed.
-// Three vertices cover the entire clip space with a single oversized triangle.
 @vertex
 fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
     var out: VertexOutput;
@@ -30,16 +29,19 @@ struct Uniforms {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // --- parallax ---
-    // let depth = textureSampleLevel(depth_tex, tex_sampler, in.uv, 0.0).r;
-    //
-    // Bleed margin: remap UVs from [0,1] to a slightly inset range so
-    // displacement pulls real pixels from outside the visible viewport.
-    // let margin = 0.025; // half of 5% zoom
-    // let base_uv = mix(vec2(margin), vec2(1.0 - margin), in.uv);
-    // let displaced = base_uv - u.cursor_offset * depth * u.intensity;
-    // return textureSample(color_tex, tex_sampler, displaced);
+    // Load depth via textureLoad (R32Float is non-filterable, can't use sampler)
+    let depth_size = textureDimensions(depth_tex);
+    let depth_coord = vec2<u32>(in.uv * vec2<f32>(depth_size));
+    let depth = textureLoad(depth_tex, depth_coord, 0).r;
 
-    // simple passthrough
-    return textureSample(color_tex, tex_sampler, in.uv);
+    // Bleed margin: zoom the texture slightly (5% total) so parallax
+    // displacement pulls real pixels from outside the visible viewport
+    // instead of stretching edge pixels.
+    let margin = 0.025;
+    let base_uv = mix(vec2<f32>(margin), vec2<f32>(1.0 - margin), in.uv);
+
+    // Displace: cursor moves right (+x) → foreground shifts left (-x)
+    let displaced_uv = base_uv - (u.cursor_offset * depth * u.intensity);
+
+    return textureSample(color_tex, tex_sampler, displaced_uv);
 }

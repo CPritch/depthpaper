@@ -62,6 +62,7 @@ fn main() -> Result<()> {
 
     while app.running {
         event_queue.blocking_dispatch(&mut app)?;
+        app.poll_depth_results();
         app.render_all(&qh);
     }
 

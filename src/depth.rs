@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Depth map at the wallpaper's native resolution.
 /// Values are normalized to [0.0, 1.0] where 1.0 = closest to camera.
@@ -10,7 +10,6 @@ pub struct DepthMap {
     pub height: u32,
 }
 
-/// Cache metadata stored alongside the raw depth data.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CacheMeta {
     width: u32,
@@ -19,11 +18,15 @@ struct CacheMeta {
     source_hash: String,
 }
 
-const MODEL_VERSION: &str = "midas-v2.1-small";
-const MIDAS_INPUT_SIZE: u32 = 256;
+const MODEL_VERSION: &str = "depth-anything-v2-small";
+const MODEL_INPUT_SIZE: u32 = 518;
+
+// ImageNet normalization constants used by Depth Anything V2
+const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+const STD: [f32; 3] = [0.229, 0.224, 0.225];
 
 /// Produce a depth map for the given wallpaper image.
-/// Checks the cache first; runs MiDaS inference on miss.
+/// Checks the cache first; runs inference on miss.
 pub fn get_depth_map(wallpaper_path: &Path, model_path: &Path) -> Result<DepthMap> {
     let img = image::open(wallpaper_path)
         .map_err(|e| anyhow::anyhow!("failed to open {}: {e}", wallpaper_path.display()))?;
@@ -32,40 +35,40 @@ pub fn get_depth_map(wallpaper_path: &Path, model_path: &Path) -> Result<DepthMa
 
     let source_hash = hash_image_bytes(&rgba);
 
-    // Check cache
     if let Some(cached) = load_from_cache(&source_hash, orig_w, orig_h) {
         info!(w = orig_w, h = orig_h, "loaded depth map from cache");
         return Ok(cached);
     }
 
-    info!(w = orig_w, h = orig_h, "running MiDaS inference...");
+    info!(w = orig_w, h = orig_h, "running Depth Anything V2 inference...");
 
-    // Preprocess: resize to model input size
+    // Preprocess: resize to 518x518 and apply ImageNet normalization
     let resized = image::imageops::resize(
         &rgba,
-        MIDAS_INPUT_SIZE,
-        MIDAS_INPUT_SIZE,
+        MODEL_INPUT_SIZE,
+        MODEL_INPUT_SIZE,
         image::imageops::FilterType::Lanczos3,
     );
 
-    // Build CHW float tensor [1, 3, H, W] normalized to [0, 1]
-    let npixels = (MIDAS_INPUT_SIZE * MIDAS_INPUT_SIZE) as usize;
-    let mut input_tensor = vec![0.0f32; 3 * npixels];
-    for y in 0..MIDAS_INPUT_SIZE {
-        for x in 0..MIDAS_INPUT_SIZE {
+    // Build CHW float tensor [1, 3, 518, 518] with ImageNet norm:
+    //   normalized = (pixel / 255.0 - mean) / std
+    let npixels = (MODEL_INPUT_SIZE * MODEL_INPUT_SIZE) as usize;
+    let mut input_data = vec![0.0f32; 3 * npixels];
+    for y in 0..MODEL_INPUT_SIZE {
+        for x in 0..MODEL_INPUT_SIZE {
             let pixel = resized.get_pixel(x, y);
-            let idx = (y * MIDAS_INPUT_SIZE + x) as usize;
-            input_tensor[idx] = pixel[0] as f32 / 255.0;              // R
-            input_tensor[npixels + idx] = pixel[1] as f32 / 255.0;    // G
-            input_tensor[2 * npixels + idx] = pixel[2] as f32 / 255.0; // B
+            let idx = (y * MODEL_INPUT_SIZE + x) as usize;
+            input_data[idx] = (pixel[0] as f32 / 255.0 - MEAN[0]) / STD[0];
+            input_data[npixels + idx] = (pixel[1] as f32 / 255.0 - MEAN[1]) / STD[1];
+            input_data[2 * npixels + idx] = (pixel[2] as f32 / 255.0 - MEAN[2]) / STD[2];
         }
     }
 
-    // Run ONNX inference
-    let raw_depth = run_midas_onnx(model_path, &input_tensor)?;
+    let raw_depth = run_inference(model_path, &input_data)?;
 
-    // Normalize to [0, 1] — MiDaS outputs inverse depth (higher = closer),
-    // which is what we want for parallax (closer objects shift more).
+    // Normalize output to [0, 1]. Depth Anything V2 outputs relative
+    // inverse depth — higher values = closer to camera, which is what
+    // we want for parallax (foreground shifts more).
     let (d_min, d_max) = raw_depth.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &v| {
         (mn.min(v), mx.max(v))
     });
@@ -76,11 +79,11 @@ pub fn get_depth_map(wallpaper_path: &Path, model_path: &Path) -> Result<DepthMa
         .map(|&v| (v - d_min) / range)
         .collect();
 
-    // Resize to original image dimensions using bilinear interpolation
+    // Resize depth from model resolution to wallpaper's native resolution
     let depth_data = resize_depth(
         &normalized,
-        MIDAS_INPUT_SIZE,
-        MIDAS_INPUT_SIZE,
+        MODEL_INPUT_SIZE,
+        MODEL_INPUT_SIZE,
         orig_w,
         orig_h,
     );
@@ -97,34 +100,35 @@ pub fn get_depth_map(wallpaper_path: &Path, model_path: &Path) -> Result<DepthMa
     Ok(result)
 }
 
-fn run_midas_onnx(model_path: &Path, input: &[f32]) -> Result<Vec<f32>> {
-    // ort 2.x: Error types don't impl std::error::Error + Send + Sync,
-    // so we use map_err throughout instead of anyhow's .context().
+fn run_inference(model_path: &Path, input: &[f32]) -> Result<Vec<f32>> {
+    // CUDA EP silently falls back to CPU if unavailable — no need
+    // for conditional registration.
     let mut session = ort::session::Session::builder()
         .map_err(|e| anyhow::anyhow!("failed to create ONNX session builder: {e}"))?
         .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
         .map_err(|e| anyhow::anyhow!("failed to set optimization level: {e}"))?
+        .with_execution_providers([ort::ep::CUDA::default().build()])
+        .map_err(|e| anyhow::anyhow!("failed to set execution providers: {e}"))?
         .commit_from_file(model_path)
         .map_err(|e| anyhow::anyhow!(
             "failed to load ONNX model from {}: {e}",
             model_path.display()
         ))?;
 
-    let input_shape: Vec<i64> = vec![1, 3, MIDAS_INPUT_SIZE as i64, MIDAS_INPUT_SIZE as i64];
+    let input_shape: Vec<i64> = vec![1, 3, MODEL_INPUT_SIZE as i64, MODEL_INPUT_SIZE as i64];
     let input_data: Box<[f32]> = input.to_vec().into_boxed_slice();
     let input_tensor = ort::value::Tensor::<f32>::from_array((input_shape, input_data))
         .map_err(|e| anyhow::anyhow!("failed to create input tensor: {e}"))?;
 
     let outputs = session
         .run(ort::inputs![input_tensor])
-        .map_err(|e| anyhow::anyhow!("MiDaS inference failed: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("inference failed: {e}"))?;
 
-    // Access the first (and only) output tensor by index.
-    // ort 2.x: try_extract_tensor returns Result<(&Shape, &[f32])>
+    // Output shape is [1, 518, 518]
     let output = &outputs[0];
     let (_shape, data) = output
         .try_extract_tensor::<f32>()
-        .map_err(|e| anyhow::anyhow!("failed to extract f32 tensor from output: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("failed to extract output tensor: {e}"))?;
 
     Ok(data.to_vec())
 }
