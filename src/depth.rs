@@ -101,8 +101,6 @@ pub fn get_depth_map(wallpaper_path: &Path, model_path: &Path) -> Result<DepthMa
 }
 
 fn run_inference(model_path: &Path, input: &[f32]) -> Result<Vec<f32>> {
-    // CUDA EP silently falls back to CPU if unavailable — no need
-    // for conditional registration.
     let mut session = ort::session::Session::builder()
         .map_err(|e| anyhow::anyhow!("failed to create ONNX session builder: {e}"))?
         .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
@@ -115,20 +113,45 @@ fn run_inference(model_path: &Path, input: &[f32]) -> Result<Vec<f32>> {
             model_path.display()
         ))?;
 
-    let input_shape: Vec<i64> = vec![1, 3, MODEL_INPUT_SIZE as i64, MODEL_INPUT_SIZE as i64];
-    let input_data: Box<[f32]> = input.to_vec().into_boxed_slice();
-    let input_tensor = ort::value::Tensor::<f32>::from_array((input_shape, input_data))
+    let sz = MODEL_INPUT_SIZE as i64;
+
+    // Try DA3 format (rank 5: [batch, views, C, H, W]) first,
+    // fall back to DA2 format (rank 4: [batch, C, H, W]).
+    // Extract data inside each arm so SessionOutputs doesn't hold
+    // a borrow on session across the retry.
+    let result: Result<Vec<f32>> = {
+        let data: Box<[f32]> = input.to_vec().into_boxed_slice();
+        let tensor = ort::value::Tensor::<f32>::from_array((vec![1i64, 1, 3, sz, sz], data))
+            .map_err(|e| anyhow::anyhow!("failed to create input tensor: {e}"))?;
+        match session.run(ort::inputs![tensor]) {
+            Ok(outputs) => {
+                debug!("inference succeeded with rank-5 input (DA3)");
+                let (_shape, d) = outputs[0]
+                    .try_extract_tensor::<f32>()
+                    .map_err(|e| anyhow::anyhow!("failed to extract output: {e}"))?;
+                Ok(d.to_vec())
+            }
+            Err(_) => {
+                debug!("rank-5 failed, retrying with rank-4 input (DA2)");
+                Err(anyhow::anyhow!("rank-5 failed"))
+            }
+        }
+    };
+
+    if let Ok(data) = result {
+        return Ok(data);
+    }
+
+    // Rank-4 fallback
+    let data: Box<[f32]> = input.to_vec().into_boxed_slice();
+    let tensor = ort::value::Tensor::<f32>::from_array((vec![1i64, 3, sz, sz], data))
         .map_err(|e| anyhow::anyhow!("failed to create input tensor: {e}"))?;
+    let outputs = session.run(ort::inputs![tensor])
+        .map_err(|e| anyhow::anyhow!("inference failed with both rank-5 and rank-4: {e}"))?;
 
-    let outputs = session
-        .run(ort::inputs![input_tensor])
-        .map_err(|e| anyhow::anyhow!("inference failed: {e}"))?;
-
-    // Output shape is [1, 518, 518]
-    let output = &outputs[0];
-    let (_shape, data) = output
+    let (_shape, data) = outputs[0]
         .try_extract_tensor::<f32>()
-        .map_err(|e| anyhow::anyhow!("failed to extract output tensor: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("failed to extract output: {e}"))?;
 
     Ok(data.to_vec())
 }
