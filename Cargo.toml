@@ -32,6 +32,7 @@ serde_json = "1"
 
 # Event loop
 calloop = "0.14"
+calloop-wayland-source = "0.4"
 
 # Logging
 tracing = "0.1"

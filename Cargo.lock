@@ -315,6 +315,7 @@ dependencies = [
  "blake3",
  "bytemuck",
  "calloop",
+ "calloop-wayland-source",
  "directories",
  "image",
  "nix",

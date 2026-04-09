@@ -5,9 +5,11 @@ mod renderer;
 mod wayland;
 
 use anyhow::{Context, Result};
-use tracing::{error, info, warn};
+use calloop::timer::{TimeoutAction, Timer};
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use wayland_client::Connection;
+use std::time::Duration;
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -32,7 +34,6 @@ fn main() -> Result<()> {
     let qh = event_queue.handle();
     let mut app = wayland::App::new(cfg.clone(), &globals, &qh)?;
 
-    // Discover outputs and create surfaces
     event_queue.roundtrip(&mut app)?;
     event_queue.roundtrip(&mut app)?;
     app.ensure_layer_surfaces(&qh);
@@ -56,54 +57,41 @@ fn main() -> Result<()> {
     info!(
         outputs = app.outputs.len(),
         render_targets = app.render_targets.len(),
-        "entering main loop"
+        "outputs ready"
     );
 
-    // Initialize cursor poller
-    let mut cursor = match cursor::CursorPoller::new(cfg.general.cursor_poll_hz) {
-        Some(c) => {
-            info!(hz = cfg.general.cursor_poll_hz, "cursor polling initialized");
-            Some(c)
-        }
-        None => {
-            warn!("failed to initialize cursor poller — parallax disabled");
-            None
-        }
-    };
+    app.init_cursor(cfg.general.cursor_poll_hz);
 
+    // Render the first frame immediately
     app.render_all(&qh);
 
+    let mut event_loop: calloop::EventLoop<wayland::App> =
+        calloop::EventLoop::try_new().context("failed to create calloop event loop")?;
+    let loop_handle = event_loop.handle();
+
+    // Wayland fd source — dispatches all SCTK delegate handlers (configure,
+    calloop_wayland_source::WaylandSource::new(conn, event_queue)
+        .insert(loop_handle.clone())
+        .map_err(|e| anyhow::anyhow!("failed to insert Wayland source: {e}"))?;
+
+    // TODO: Implement idle detection and pause.
+    let poll_interval = Duration::from_secs_f64(1.0 / cfg.general.cursor_poll_hz as f64);
+    let tick_timer = Timer::immediate();
+    let qh_tick = qh.clone();
+
+    loop_handle
+        .insert_source(tick_timer, move |_deadline, _metadata, app: &mut wayland::App| {
+            app.tick(&qh_tick);
+            TimeoutAction::ToDuration(poll_interval)
+        })
+        .map_err(|e| anyhow::anyhow!("failed to insert timer source: {e}"))?;
+
+    info!(hz = cfg.general.cursor_poll_hz, "entering calloop event loop");
+
     while app.running {
-        event_queue.blocking_dispatch(&mut app)?;
-        app.poll_depth_results();
-
-        // Poll cursor and update uniforms
-        if let (Some(cursor), Some(renderer)) = (&mut cursor, &app.renderer) {
-            // Use first output's geometry for now.
-            // TODO: per-monitor cursor offsets for multi-monitor.
-            if let Some(output) = app.outputs.first() {
-                let intensity = cfg.intensity_for(&output.name);
-
-                // Hyprland reports in scaled coordinates; output dimensions
-                // from the configure event are already in surface coords.
-                let moved = cursor.poll(
-                    0.0, 0.0, // monitor offset in global coords (single monitor = 0,0)
-                    output.width as f32,
-                    output.height as f32,
-                    0.3, // smoothing factor (0.0 = frozen, 1.0 = instant)
-                );
-
-                if moved {
-                    renderer.update_uniforms(
-                        cursor.offset_x,
-                        cursor.offset_y,
-                        intensity,
-                    );
-                }
-            }
-        }
-
-        app.render_all(&qh);
+        event_loop
+            .dispatch(None, &mut app)
+            .context("calloop dispatch error")?;
     }
 
     Ok(())

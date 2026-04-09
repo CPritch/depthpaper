@@ -26,6 +26,7 @@ use std::ffi::c_void;
 use std::sync::mpsc;
 
 use crate::config::Config;
+use crate::cursor::CursorPoller;
 use crate::renderer::{OutputRenderState, Renderer};
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
@@ -60,6 +61,7 @@ pub struct App {
     pub render_targets: HashMap<String, OutputRenderState>,
     pub depth_rx: mpsc::Receiver<DepthResult>,
     pub depth_tx: mpsc::Sender<DepthResult>,
+    pub cursor: Option<CursorPoller>,
     pub running: bool,
 }
 
@@ -87,8 +89,53 @@ impl App {
             render_targets: HashMap::new(),
             depth_tx,
             depth_rx,
+            cursor: None,
             running: true,
         })
+    }
+
+    /// Initialize the Hyprland cursor poller.
+    pub fn init_cursor(&mut self, poll_hz: u32) {
+        match CursorPoller::new(poll_hz) {
+            Some(c) => {
+                info!(hz = poll_hz, "cursor polling initialized");
+                self.cursor = Some(c);
+            }
+            None => {
+                warn!("failed to initialize cursor poller — parallax disabled");
+            }
+        }
+    }
+
+    /// Per-frame tick called from the calloop timer source.
+    /// Polls depth results, updates cursor, renders all outputs.
+    pub fn tick(&mut self, qh: &QueueHandle<Self>) {
+        self.poll_depth_results();
+
+        if let (Some(cursor), Some(renderer)) = (&mut self.cursor, &self.renderer) {
+            // Use first output's geometry for now.
+            // TODO: per-monitor cursor offsets for multi-monitor.
+            if let Some(output) = self.outputs.first() {
+                let intensity = self.config.intensity_for(&output.name);
+
+                let moved = cursor.poll(
+                    0.0, 0.0, // monitor offset in global coords (single monitor = 0,0)
+                    output.width as f32,
+                    output.height as f32,
+                    0.3,
+                );
+
+                if moved {
+                    renderer.update_uniforms(
+                        cursor.offset_x,
+                        cursor.offset_y,
+                        intensity,
+                    );
+                }
+            }
+        }
+
+        self.render_all(qh);
     }
 
     /// Called from main after roundtrips — creates layer surfaces for any
@@ -429,7 +476,7 @@ impl LayerShellHandler for App {
 
             surface.configure(&renderer.device, &surface_config);
 
-            // Load wallpaper — render immediately with placeholder depth
+            // Load wallpaper - render immediately with placeholder depth
             let wallpaper_path = self.config.wallpaper_for(&output_name).to_path_buf();
 
             let color_view = match renderer.load_wallpaper_texture(&wallpaper_path) {
