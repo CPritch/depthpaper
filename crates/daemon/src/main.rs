@@ -15,11 +15,11 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("depthpaper=info")),
+                .unwrap_or_else(|_| EnvFilter::new("depthpaper_daemon=info")),
         )
         .init();
 
-    info!("starting depthpaper");
+    info!("starting depthpaper-daemon");
 
     let cfg = config::Config::load()?;
     info!(?cfg, "configuration loaded");
@@ -61,20 +61,16 @@ fn main() -> Result<()> {
     );
 
     app.init_cursor(cfg.general.cursor_poll_hz);
-
-    // Render the first frame immediately
     app.render_all(&qh);
 
     let mut event_loop: calloop::EventLoop<wayland::App> =
         calloop::EventLoop::try_new().context("failed to create calloop event loop")?;
     let loop_handle = event_loop.handle();
 
-    // Wayland fd source — dispatches all SCTK delegate handlers (configure,
     calloop_wayland_source::WaylandSource::new(conn, event_queue)
         .insert(loop_handle.clone())
         .map_err(|e| anyhow::anyhow!("failed to insert Wayland source: {e}"))?;
 
-    // TODO: Implement idle detection and pause.
     let poll_interval = Duration::from_secs_f64(1.0 / cfg.general.cursor_poll_hz as f64);
     let tick_timer = Timer::immediate();
     let qh_tick = qh.clone();

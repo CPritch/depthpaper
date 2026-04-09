@@ -23,7 +23,6 @@ use wayland_client::{
 use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::ffi::c_void;
-use std::sync::mpsc;
 
 use crate::config::Config;
 use crate::cursor::CursorPoller;
@@ -32,13 +31,6 @@ use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
 
-/// Result from a background depth estimation thread.
-pub struct DepthResult {
-    pub output_name: String,
-    pub depth_map: crate::depth::DepthMap,
-}
-
-/// Tracks Wayland state for one output.
 pub struct OutputInfo {
     pub name: String,
     pub wl_output: wl_output::WlOutput,
@@ -59,8 +51,6 @@ pub struct App {
     pub outputs: Vec<OutputInfo>,
     pub renderer: Option<Renderer>,
     pub render_targets: HashMap<String, OutputRenderState>,
-    pub depth_rx: mpsc::Receiver<DepthResult>,
-    pub depth_tx: mpsc::Sender<DepthResult>,
     pub cursor: Option<CursorPoller>,
     pub running: bool,
 }
@@ -75,8 +65,6 @@ impl App {
             LayerShell::bind(globals, qh).context("wlr-layer-shell not available")?;
         let shm = Shm::bind(globals, qh).context("wl_shm not available")?;
 
-        let (depth_tx, depth_rx) = mpsc::channel();
-
         Ok(Self {
             config,
             registry_state,
@@ -87,14 +75,11 @@ impl App {
             outputs: Vec::new(),
             renderer: None,
             render_targets: HashMap::new(),
-            depth_tx,
-            depth_rx,
             cursor: None,
             running: true,
         })
     }
 
-    /// Initialize the Hyprland cursor poller.
     pub fn init_cursor(&mut self, poll_hz: u32) {
         match CursorPoller::new(poll_hz) {
             Some(c) => {
@@ -107,19 +92,13 @@ impl App {
         }
     }
 
-    /// Per-frame tick called from the calloop timer source.
-    /// Polls depth results, updates cursor, renders all outputs.
     pub fn tick(&mut self, qh: &QueueHandle<Self>) {
-        self.poll_depth_results();
-
         if let (Some(cursor), Some(renderer)) = (&mut self.cursor, &self.renderer) {
-            // Use first output's geometry for now.
-            // TODO: per-monitor cursor offsets for multi-monitor.
             if let Some(output) = self.outputs.first() {
                 let intensity = self.config.intensity_for(&output.name);
 
                 let moved = cursor.poll(
-                    0.0, 0.0, // monitor offset in global coords (single monitor = 0,0)
+                    0.0, 0.0,
                     output.width as f32,
                     output.height as f32,
                     0.3,
@@ -138,13 +117,8 @@ impl App {
         self.render_all(qh);
     }
 
-    /// Called from main after roundtrips — creates layer surfaces for any
-    /// outputs that were discovered but never got update_output called.
-    /// This handles the SCTK race where output info arrives before our
-    /// handler is connected.
     pub fn ensure_layer_surfaces(&mut self, qh: &QueueHandle<Self>) {
         for o in &mut self.outputs {
-            // Try to fill in info from OutputState if we haven't got it yet
             if o.name.is_empty() {
                 if let Some(info) = self.output_state.info(&o.wl_output) {
                     o.name = info.name.clone().unwrap_or_default();
@@ -163,7 +137,6 @@ impl App {
                 }
             }
 
-            // Create layer surface if we have a name but no surface yet
             if !o.name.is_empty() && o.layer_surface.is_none() {
                 let surface = self.compositor_state.create_surface(qh);
                 let layer_surface = self.layer_shell.create_layer_surface(
@@ -203,31 +176,7 @@ impl App {
             }
         }
     }
-
-    /// Check for completed background depth estimations and swap in
-    /// the real depth texture, replacing the placeholder bind group.
-    pub fn poll_depth_results(&mut self) {
-        let renderer = match &self.renderer {
-            Some(r) => r,
-            None => return,
-        };
-
-        while let Ok(result) = self.depth_rx.try_recv() {
-            if let Some(rt) = self.render_targets.get_mut(&result.output_name) {
-                let (_tex, depth_view) = renderer.upload_depth_map(&result.depth_map);
-                rt.bind_group = renderer.create_bind_group(&rt.color_view, &depth_view);
-                info!(
-                    name = result.output_name,
-                    w = result.depth_map.width,
-                    h = result.depth_map.height,
-                    "depth map applied to output"
-                );
-            }
-        }
-    }
 }
-
-// --- Smithay delegate implementations ---
 
 impl CompositorHandler for App {
     fn scale_factor_changed(
@@ -418,16 +367,12 @@ impl LayerShellHandler for App {
         let output_w = self.outputs[output_idx].width;
         let output_h = self.outputs[output_idx].height;
 
-        debug!(name = output_name, w = output_w, h = output_h, "configuring output");
-
         let renderer = self.renderer.as_ref().unwrap();
 
         if !self.render_targets.contains_key(&output_name) {
             let display_ptr = conn.backend().display_ptr() as *mut c_void;
             let wl_surface = layer.wl_surface();
             let surface_ptr = wl_surface.id().as_ptr() as *mut c_void;
-
-            debug!(?display_ptr, ?surface_ptr, "raw wayland handles");
 
             let display_handle = WaylandDisplayHandle::new(
                 NonNull::new(display_ptr).expect("null display ptr"),
@@ -456,13 +401,6 @@ impl LayerShellHandler for App {
                 surface_caps.alpha_modes[0]
             };
 
-            debug!(
-                name = output_name,
-                ?alpha_mode,
-                formats = ?surface_caps.formats,
-                "surface capabilities"
-            );
-
             let surface_config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format: wgpu::TextureFormat::Bgra8UnormSrgb,
@@ -476,19 +414,41 @@ impl LayerShellHandler for App {
 
             surface.configure(&renderer.device, &surface_config);
 
-            // Load wallpaper - render immediately with placeholder depth
-            let wallpaper_path = self.config.wallpaper_for(&output_name).to_path_buf();
+            let color_path = self.config.color_for(&output_name).to_path_buf();
+            let depth_path = self.config.depth_for(&output_name);
 
-            let color_view = match renderer.load_wallpaper_texture(&wallpaper_path) {
+            let color_view = match renderer.load_wallpaper_texture(&color_path) {
                 Ok(v) => v,
                 Err(e) => {
-                    warn!("failed to load wallpaper: {e:#}");
+                    warn!("failed to load color texture: {e:#}");
                     return;
                 }
             };
 
-            // Start with placeholder depth (flat wallpaper, no parallax)
-            let bind_group = renderer.create_bind_group(&color_view, &renderer.depth_view);
+            // Load depth synchronously. On failure fall back to the flat
+            // placeholder so the wallpaper still shows without parallax.
+            // The bind group holds strong refs to its resources, so the
+            // depth texture stays alive for the render target's lifetime.
+            let bind_group = match crate::depth::load_depth_map(&depth_path) {
+                Ok(depth) => {
+                    let (_tex, view) = renderer.upload_depth_map(&depth);
+                    info!(
+                        name = output_name,
+                        w = depth.width,
+                        h = depth.height,
+                        path = %depth_path.display(),
+                        "depth map loaded"
+                    );
+                    renderer.create_bind_group(&color_view, &view)
+                }
+                Err(e) => {
+                    warn!(
+                        path = %depth_path.display(),
+                        "failed to load depth map, using flat placeholder: {e:#}"
+                    );
+                    renderer.create_bind_group(&color_view, &renderer.depth_view)
+                }
+            };
 
             let render_state = OutputRenderState {
                 surface,
@@ -498,28 +458,7 @@ impl LayerShellHandler for App {
             };
 
             self.render_targets.insert(output_name.clone(), render_state);
-            info!(name = output_name, w = output_w, h = output_h, "output initialized (depth pending)");
-
-            // Spawn background depth estimation if model is configured
-            if let Some(model_path) = &self.config.general.model_path {
-                let tx = self.depth_tx.clone();
-                let wp = wallpaper_path.clone();
-                let mp = model_path.clone();
-                let name = output_name.clone();
-                std::thread::spawn(move || {
-                    match crate::depth::get_depth_map(&wp, &mp) {
-                        Ok(depth) => {
-                            let _ = tx.send(DepthResult {
-                                output_name: name,
-                                depth_map: depth,
-                            });
-                        }
-                        Err(e) => {
-                            warn!("background depth estimation failed: {e:#}");
-                        }
-                    }
-                });
-            }
+            info!(name = output_name, w = output_w, h = output_h, "output initialized");
 
             layer.wl_surface().frame(qh, layer.wl_surface().clone());
             layer.wl_surface().commit();
