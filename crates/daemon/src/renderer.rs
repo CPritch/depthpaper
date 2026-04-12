@@ -44,7 +44,7 @@ impl Renderer {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("depthpaper"),
-                required_features: wgpu::Features::empty(),
+                required_features: wgpu::Features::TEXTURE_FORMAT_16BIT_NORM,
                 required_limits: wgpu::Limits::default(),
                 ..Default::default()
             }, None)
