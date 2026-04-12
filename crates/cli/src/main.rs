@@ -107,8 +107,23 @@ fn daemon_config_path() -> PathBuf {
 
 fn update_daemon_config(color_path: &Path) -> Result<()> {
     let path = daemon_config_path();
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+
+    let text = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            info!(path = %path.display(), "config not found, creating");
+            String::new()
+        }
+        Err(e) => {
+            return Err(anyhow::Error::new(e)
+                .context(format!("failed to read {}", path.display())));
+        }
+    };
 
     let mut doc: DocumentMut = text
         .parse()
