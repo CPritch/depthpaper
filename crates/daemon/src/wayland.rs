@@ -1,10 +1,15 @@
 use anyhow::{Context, Result};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_shm,
+    delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
+    delegate_seat, delegate_shm,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
+    seat::{
+        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+        Capability, SeatHandler, SeatState,
+    },
     shell::{
         wlr_layer::{
             Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
@@ -16,15 +21,15 @@ use smithay_client_toolkit::{
 };
 use tracing::{debug, info, warn};
 use wayland_client::{
-    protocol::{wl_output, wl_surface},
-    Connection, QueueHandle, Proxy,
     globals::GlobalList,
+    protocol::{wl_output, wl_pointer, wl_seat, wl_surface},
+    Connection, Proxy, QueueHandle,
 };
 use std::collections::HashMap;
-use std::ptr::NonNull;
 use std::ffi::c_void;
+use std::ptr::NonNull;
 
-use crate::config::Config;
+use crate::config::{Config, TrackingMode};
 use crate::cursor::CursorPoller;
 use crate::renderer::{OutputRenderState, Renderer};
 use raw_window_handle::{
@@ -46,12 +51,16 @@ pub struct App {
     pub registry_state: RegistryState,
     pub compositor_state: CompositorState,
     pub output_state: OutputState,
+    pub seat_state: SeatState,
     pub layer_shell: LayerShell,
     pub shm: Shm,
     pub outputs: Vec<OutputInfo>,
     pub renderer: Option<Renderer>,
     pub render_targets: HashMap<String, OutputRenderState>,
     pub cursor: Option<CursorPoller>,
+    pub pointer: Option<wl_pointer::WlPointer>,
+    /// Name of the output the pointer is currently over, in pointer mode.
+    pub pointer_active_output: Option<String>,
     pub running: bool,
 }
 
@@ -61,6 +70,7 @@ impl App {
         let compositor_state =
             CompositorState::bind(globals, qh).context("wl_compositor not available")?;
         let output_state = OutputState::new(globals, qh);
+        let seat_state = SeatState::new(globals, qh);
         let layer_shell =
             LayerShell::bind(globals, qh).context("wlr-layer-shell not available")?;
         let shm = Shm::bind(globals, qh).context("wl_shm not available")?;
@@ -70,12 +80,15 @@ impl App {
             registry_state,
             compositor_state,
             output_state,
+            seat_state,
             layer_shell,
             shm,
             outputs: Vec::new(),
             renderer: None,
             render_targets: HashMap::new(),
             cursor: None,
+            pointer: None,
+            pointer_active_output: None,
             running: true,
         })
     }
@@ -92,6 +105,8 @@ impl App {
         }
     }
 
+    /// Hyprland-mode tick: poll the IPC cursor and render every output.
+    /// Not called in pointer mode (the timer source is not inserted).
     pub fn tick(&mut self, qh: &QueueHandle<Self>) {
         if let (Some(cursor), Some(renderer)) = (&mut self.cursor, &self.renderer) {
             if let Some(output) = self.outputs.first() {
@@ -174,6 +189,28 @@ impl App {
                 }
                 renderer.render_frame(render_state);
             }
+        }
+    }
+
+    /// Render a single named output. Used by pointer mode to avoid
+    /// re-rendering monitors that didn't receive the cursor event.
+    pub fn render_output(&self, qh: &QueueHandle<Self>, output_name: &str) {
+        let renderer = match &self.renderer {
+            Some(r) => r,
+            None => return,
+        };
+        let output = match self.outputs.iter().find(|o| o.name == output_name) {
+            Some(o) => o,
+            None => return,
+        };
+        if !output.configured {
+            return;
+        }
+        if let Some(rt) = self.render_targets.get(output_name) {
+            if let Some(layer) = &output.layer_surface {
+                layer.wl_surface().frame(qh, layer.wl_surface().clone());
+            }
+            renderer.render_frame(rt);
         }
     }
 }
@@ -425,10 +462,6 @@ impl LayerShellHandler for App {
                 }
             };
 
-            // Load depth synchronously. On failure fall back to the flat
-            // placeholder so the wallpaper still shows without parallax.
-            // The bind group holds strong refs to its resources, so the
-            // depth texture stays alive for the render target's lifetime.
             let bind_group = match crate::depth::load_depth_map(&depth_path) {
                 Ok(depth) => {
                     let (_tex, view) = renderer.upload_depth_map(&depth);
@@ -473,6 +506,112 @@ impl LayerShellHandler for App {
     }
 }
 
+impl SeatHandler for App {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer && self.pointer.is_none() {
+            match self.seat_state.get_pointer(qh, &seat) {
+                Ok(pointer) => {
+                    info!("acquired pointer from seat");
+                    self.pointer = Some(pointer);
+                }
+                Err(e) => warn!("failed to get pointer: {e}"),
+            }
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer {
+            if let Some(pointer) = self.pointer.take() {
+                pointer.release();
+            }
+            self.pointer_active_output = None;
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl PointerHandler for App {
+    fn pointer_frame(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        // Pointer events arrive regardless of mode; only act on them in
+        // pointer mode. Hyprland mode runs its own polling tick.
+        if self.config.daemon.tracking_mode != TrackingMode::Pointer {
+            return;
+        }
+
+        for event in events {
+            // Match the event surface to one of our layer surfaces, and
+            // pull out everything we need as owned/Copy data so we drop
+            // the immutable borrow on self.outputs before any mutation.
+            let output_info = self.outputs.iter().find_map(|o| {
+                let matches = o
+                    .layer_surface
+                    .as_ref()
+                    .map(|ls| ls.wl_surface() == &event.surface)
+                    .unwrap_or(false);
+                if matches {
+                    Some((o.name.clone(), o.width as f32, o.height as f32))
+                } else {
+                    None
+                }
+            });
+
+            let (output_name, output_w, output_h) = match output_info {
+                Some(t) => t,
+                None => continue,
+            };
+
+            match event.kind {
+                PointerEventKind::Enter { .. } => {
+                    debug!(name = %output_name, "pointer entered");
+                    self.pointer_active_output = Some(output_name);
+                }
+                PointerEventKind::Leave { .. } => {
+                    debug!(name = %output_name, "pointer left");
+                    if self.pointer_active_output.as_deref() == Some(output_name.as_str()) {
+                        self.pointer_active_output = None;
+                    }
+                }
+                PointerEventKind::Motion { .. } => {
+                    let (x, y) = event.position;
+                    let offset_x = (x as f32 / output_w) - 0.5;
+                    let offset_y = (y as f32 / output_h) - 0.5;
+                    let intensity = self.config.intensity_for(&output_name);
+                    if let Some(renderer) = &self.renderer {
+                        renderer.update_uniforms(offset_x, offset_y, intensity);
+                    }
+                    self.render_output(qh, &output_name);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 impl ShmHandler for App {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
@@ -484,11 +623,13 @@ impl ProvidesRegistryState for App {
         &mut self.registry_state
     }
 
-    registry_handlers!(OutputState);
+    registry_handlers!(OutputState, SeatState);
 }
 
 delegate_compositor!(App);
 delegate_output!(App);
 delegate_layer!(App);
+delegate_seat!(App);
+delegate_pointer!(App);
 delegate_registry!(App);
 delegate_shm!(App);
