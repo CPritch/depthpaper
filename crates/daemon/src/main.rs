@@ -60,7 +60,16 @@ fn main() -> Result<()> {
         "outputs ready"
     );
 
-    app.init_cursor(cfg.daemon.cursor_poll_hz);
+    match cfg.daemon.tracking_mode {
+        config::TrackingMode::Hyprland => {
+            info!("tracking mode: hyprland (IPC polling)");
+            app.init_cursor(cfg.daemon.cursor_poll_hz);
+        }
+        config::TrackingMode::Pointer => {
+            info!("tracking mode: pointer (Wayland-native, event-driven)");
+        }
+    }
+
     app.render_all(&qh);
 
     let mut event_loop: calloop::EventLoop<wayland::App> =
@@ -71,18 +80,25 @@ fn main() -> Result<()> {
         .insert(loop_handle.clone())
         .map_err(|e| anyhow::anyhow!("failed to insert Wayland source: {e}"))?;
 
-    let poll_interval = Duration::from_secs_f64(1.0 / cfg.daemon.cursor_poll_hz as f64);
-    let tick_timer = Timer::immediate();
-    let qh_tick = qh.clone();
+    // Hyprland mode polls on a timer. Pointer mode is event-driven via
+    // the Wayland source, no timer, no rendering when the pointer is
+    // off-surface,
+    if matches!(cfg.daemon.tracking_mode, config::TrackingMode::Hyprland) {
+        let poll_interval = Duration::from_secs_f64(1.0 / cfg.daemon.cursor_poll_hz as f64);
+        let tick_timer = Timer::immediate();
+        let qh_tick = qh.clone();
 
-    loop_handle
-        .insert_source(tick_timer, move |_deadline, _metadata, app: &mut wayland::App| {
-            app.tick(&qh_tick);
-            TimeoutAction::ToDuration(poll_interval)
-        })
-        .map_err(|e| anyhow::anyhow!("failed to insert timer source: {e}"))?;
+        loop_handle
+            .insert_source(tick_timer, move |_deadline, _metadata, app: &mut wayland::App| {
+                app.tick(&qh_tick);
+                TimeoutAction::ToDuration(poll_interval)
+            })
+            .map_err(|e| anyhow::anyhow!("failed to insert timer source: {e}"))?;
 
-    info!(hz = cfg.daemon.cursor_poll_hz, "entering calloop event loop");
+        info!(hz = cfg.daemon.cursor_poll_hz, "hyprland tick timer inserted");
+    }
+
+    info!("entering calloop event loop");
 
     while app.running {
         event_loop

@@ -20,6 +20,21 @@ pub struct DaemonConfig {
     #[serde(default = "default_idle_timeout")]
     #[allow(dead_code)] // Phase 3: idle detection
     pub idle_timeout_secs: u64,
+    #[serde(default)]
+    pub tracking_mode: TrackingMode,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TrackingMode {
+    /// Wayland-native pointer events. Default. Works on any
+    /// wlr-layer-shell compositor; renders only when the cursor is
+    /// over visible desktop.
+    #[default]
+    Pointer,
+    /// Hyprland IPC global cursor polling. Hyprland-only; sees the
+    /// cursor even when windows cover the desktop.
+    Hyprland,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -43,6 +58,7 @@ impl Default for DaemonConfig {
             cursor_poll_hz: default_poll_hz(),
             parallax_intensity: default_intensity(),
             idle_timeout_secs: default_idle_timeout(),
+            tracking_mode: TrackingMode::default(),
         }
     }
 }
