@@ -5,14 +5,14 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     #[serde(default)]
-    pub general: General,
-    pub wallpaper: Wallpaper,
+    pub daemon: DaemonConfig,
+    pub wallpaper: WallpaperConfig,
     #[serde(default)]
     pub monitor: Vec<MonitorOverride>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct General {
+pub struct DaemonConfig {
     #[serde(default = "default_poll_hz")]
     pub cursor_poll_hz: u32,
     #[serde(default = "default_intensity")]
@@ -23,7 +23,7 @@ pub struct General {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct Wallpaper {
+pub struct WallpaperConfig {
     pub color: PathBuf,
     #[serde(default)]
     pub depth: Option<PathBuf>,
@@ -37,7 +37,7 @@ pub struct MonitorOverride {
     pub parallax_intensity: Option<f32>,
 }
 
-impl Default for General {
+impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
             cursor_poll_hz: default_poll_hz(),
@@ -86,8 +86,6 @@ impl Config {
             .unwrap_or(&self.wallpaper.color)
     }
 
-    /// Resolve the depth map path for an output. Per-monitor override wins,
-    /// then top-level explicit depth, then sibling inference from color path.
     pub fn depth_for(&self, output_name: &str) -> PathBuf {
         if let Some(d) = self
             .monitor
@@ -108,12 +106,10 @@ impl Config {
             .iter()
             .find(|m| m.name == output_name)
             .and_then(|m| m.parallax_intensity)
-            .unwrap_or(self.general.parallax_intensity)
+            .unwrap_or(self.daemon.parallax_intensity)
     }
 }
 
-/// `foo.color.png` → `foo.depth16.png`. Other filenames get `.depth16.png`
-/// appended before the extension.
 fn infer_depth_path(color: &Path) -> PathBuf {
     let s = color.to_string_lossy();
     if let Some(stripped) = s.strip_suffix(".color.png") {
