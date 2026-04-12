@@ -18,20 +18,22 @@ pub struct General {
     #[serde(default = "default_intensity")]
     pub parallax_intensity: f32,
     #[serde(default = "default_idle_timeout")]
-    #[allow(dead_code)] // Phase 4: idle detection
+    #[allow(dead_code)] // Phase 3: idle detection
     pub idle_timeout_secs: u64,
-    pub model_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Wallpaper {
-    pub path: PathBuf,
+    pub color: PathBuf,
+    #[serde(default)]
+    pub depth: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct MonitorOverride {
     pub name: String,
-    pub wallpaper: Option<PathBuf>,
+    pub color: Option<PathBuf>,
+    pub depth: Option<PathBuf>,
     pub parallax_intensity: Option<f32>,
 }
 
@@ -41,7 +43,6 @@ impl Default for General {
             cursor_poll_hz: default_poll_hz(),
             parallax_intensity: default_intensity(),
             idle_timeout_secs: default_idle_timeout(),
-            model_path: None,
         }
     }
 }
@@ -61,13 +62,15 @@ impl Config {
         let mut cfg: Config =
             toml::from_str(&text).with_context(|| "failed to parse config")?;
 
-        // Expand ~ in paths
-        cfg.wallpaper.path = expand_tilde(&cfg.wallpaper.path);
-        if let Some(ref mut p) = cfg.general.model_path {
+        cfg.wallpaper.color = expand_tilde(&cfg.wallpaper.color);
+        if let Some(ref mut p) = cfg.wallpaper.depth {
             *p = expand_tilde(p);
         }
         for m in &mut cfg.monitor {
-            if let Some(ref mut p) = m.wallpaper {
+            if let Some(ref mut p) = m.color {
+                *p = expand_tilde(p);
+            }
+            if let Some(ref mut p) = m.depth {
                 *p = expand_tilde(p);
             }
         }
@@ -75,16 +78,31 @@ impl Config {
         Ok(cfg)
     }
 
-    /// Get the wallpaper path for a given output name, falling back to default.
-    pub fn wallpaper_for(&self, output_name: &str) -> &Path {
+    pub fn color_for(&self, output_name: &str) -> &Path {
         self.monitor
             .iter()
             .find(|m| m.name == output_name)
-            .and_then(|m| m.wallpaper.as_deref())
-            .unwrap_or(&self.wallpaper.path)
+            .and_then(|m| m.color.as_deref())
+            .unwrap_or(&self.wallpaper.color)
     }
 
-    /// Get parallax intensity for a given output, falling back to default.
+    /// Resolve the depth map path for an output. Per-monitor override wins,
+    /// then top-level explicit depth, then sibling inference from color path.
+    pub fn depth_for(&self, output_name: &str) -> PathBuf {
+        if let Some(d) = self
+            .monitor
+            .iter()
+            .find(|m| m.name == output_name)
+            .and_then(|m| m.depth.as_deref())
+        {
+            return d.to_path_buf();
+        }
+        if let Some(d) = &self.wallpaper.depth {
+            return d.clone();
+        }
+        infer_depth_path(self.color_for(output_name))
+    }
+
     pub fn intensity_for(&self, output_name: &str) -> f32 {
         self.monitor
             .iter()
@@ -92,6 +110,22 @@ impl Config {
             .and_then(|m| m.parallax_intensity)
             .unwrap_or(self.general.parallax_intensity)
     }
+}
+
+/// `foo.color.png` → `foo.depth16.png`. Other filenames get `.depth16.png`
+/// appended before the extension.
+fn infer_depth_path(color: &Path) -> PathBuf {
+    let s = color.to_string_lossy();
+    if let Some(stripped) = s.strip_suffix(".color.png") {
+        return PathBuf::from(format!("{stripped}.depth16.png"));
+    }
+    let mut p = color.to_path_buf();
+    let stem = p
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    p.set_file_name(format!("{stem}.depth16.png"));
+    p
 }
 
 fn config_path() -> PathBuf {
