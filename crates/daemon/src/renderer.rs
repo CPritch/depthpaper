@@ -3,7 +3,6 @@ use std::path::Path;
 use tracing::{debug, info};
 use wgpu::util::DeviceExt;
 
-/// Per-output render state: surface, swapchain config, and bind group.
 pub struct OutputRenderState {
     pub surface: wgpu::Surface<'static>,
     pub config: wgpu::SurfaceConfiguration,
@@ -11,7 +10,6 @@ pub struct OutputRenderState {
     pub color_view: wgpu::TextureView,
 }
 
-/// Shared GPU state and pipeline.
 pub struct Renderer {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
@@ -57,7 +55,6 @@ impl Renderer {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("depthpaper_bgl"),
                 entries: &[
-                    // 0: color texture
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -68,14 +65,12 @@ impl Renderer {
                         },
                         count: None,
                     },
-                    // 1: sampler
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
-                    // 2: depth texture (placeholder until Phase 2)
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
                         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -86,7 +81,6 @@ impl Renderer {
                         },
                         count: None,
                     },
-                    // 3: uniforms (cursor offset, intensity)
                     wgpu::BindGroupLayoutEntry {
                         binding: 3,
                         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -154,7 +148,6 @@ impl Renderer {
         let depth_placeholder = create_placeholder_depth(&device, &queue);
         let depth_view = depth_placeholder.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Layout: vec2<f32> cursor_offset, f32 intensity, f32 _pad
         let uniform_data = [0.0f32, 0.0, 0.025, 0.0];
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("uniforms"),
@@ -176,13 +169,11 @@ impl Renderer {
         })
     }
 
-    /// Update the uniform buffer with new cursor offset and intensity.
     pub fn update_uniforms(&self, offset_x: f32, offset_y: f32, intensity: f32) {
         let data = [offset_x, offset_y, intensity, 0.0f32];
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&data));
     }
 
-    /// Upload a depth map as a GPU texture. Returns the texture and view.
     pub fn upload_depth_map(&self, depth: &crate::depth::DepthMap) -> (wgpu::Texture, wgpu::TextureView) {
         let size = wgpu::Extent3d {
             width: depth.width,
@@ -196,12 +187,10 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Float,
+            format: wgpu::TextureFormat::R16Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-
-        let bytes: Vec<u8> = depth.data.iter().flat_map(|v| v.to_le_bytes()).collect();
 
         self.queue.write_texture(
             wgpu::ImageCopyTexture {
@@ -210,10 +199,10 @@ impl Renderer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &bytes,
+            bytemuck::cast_slice(&depth.data),
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(4 * depth.width),
+                bytes_per_row: Some(2 * depth.width),
                 rows_per_image: Some(depth.height),
             },
             size,
@@ -224,7 +213,6 @@ impl Renderer {
         (texture, view)
     }
 
-    /// Create a bind group with a specific depth texture view.
     pub fn create_bind_group(&self, color_view: &wgpu::TextureView, depth_view: &wgpu::TextureView) -> wgpu::BindGroup {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("depthpaper_bg"),
@@ -250,9 +238,6 @@ impl Renderer {
         })
     }
 
-
-
-    /// Load just the wallpaper color texture view (for pairing with a real depth map).
     pub fn load_wallpaper_texture(&self, path: &Path) -> Result<wgpu::TextureView> {
         let img = image::open(path)
             .with_context(|| format!("failed to load image: {}", path.display()))?
@@ -296,8 +281,6 @@ impl Renderer {
         Ok(texture.create_view(&wgpu::TextureViewDescriptor::default()))
     }
 
-    /// Render a single frame to the given output's surface.
-    /// Returns true if the frame was presented successfully.
     pub fn render_frame(&self, output: &OutputRenderState) -> bool {
         let frame = match output.surface.get_current_texture() {
             Ok(f) => f,
@@ -334,7 +317,7 @@ impl Renderer {
 
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &output.bind_group, &[]);
-            pass.draw(0..3, 0..1); // fullscreen triangle
+            pass.draw(0..3, 0..1);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -351,7 +334,7 @@ fn create_placeholder_depth(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu:
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::R32Float,
+        format: wgpu::TextureFormat::R16Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
@@ -362,8 +345,8 @@ fn create_placeholder_depth(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu:
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        &[0u8; 4],
-        wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+        &[0u8; 2],
+        wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(2), rows_per_image: Some(1) },
         size,
     );
     tex
