@@ -110,8 +110,6 @@ impl App {
     pub fn tick(&mut self, qh: &QueueHandle<Self>) {
         if let (Some(cursor), Some(renderer)) = (&mut self.cursor, &self.renderer) {
             if let Some(output) = self.outputs.first() {
-                let intensity = self.config.intensity_for(&output.name);
-
                 let moved = cursor.poll(
                     0.0, 0.0,
                     output.width as f32,
@@ -120,11 +118,19 @@ impl App {
                 );
 
                 if moved {
-                    renderer.update_uniforms(
-                        cursor.offset_x,
-                        cursor.offset_y,
-                        intensity,
-                    );
+                    // Write the same value to every output's uniform buffer.
+                    // cursor.rs already smooths so we skip the per-output lerp.
+                    for o in &self.outputs {
+                        let intensity = self.config.intensity_for(&o.name);
+                        if let Some(rt) = self.render_targets.get(&o.name) {
+                            rt.write_uniforms_direct(
+                                &renderer.queue,
+                                cursor.offset_x,
+                                cursor.offset_y,
+                                intensity,
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -462,6 +468,8 @@ impl LayerShellHandler for App {
                 }
             };
 
+            let uniform_buffer = renderer.create_uniform_buffer();
+
             let bind_group = match crate::depth::load_depth_map(&depth_path) {
                 Ok(depth) => {
                     let (_tex, view) = renderer.upload_depth_map(&depth);
@@ -472,14 +480,14 @@ impl LayerShellHandler for App {
                         path = %depth_path.display(),
                         "depth map loaded"
                     );
-                    renderer.create_bind_group(&color_view, &view)
+                    renderer.create_bind_group(&color_view, &view, &uniform_buffer)
                 }
                 Err(e) => {
                     warn!(
                         path = %depth_path.display(),
                         "failed to load depth map, using flat placeholder: {e:#}"
                     );
-                    renderer.create_bind_group(&color_view, &renderer.depth_view)
+                    renderer.create_bind_group(&color_view, &renderer.depth_view, &uniform_buffer)
                 }
             };
 
@@ -488,6 +496,9 @@ impl LayerShellHandler for App {
                 config: surface_config,
                 bind_group,
                 color_view,
+                uniform_buffer,
+                current_offset: (0.0, 0.0),
+                target_offset: (0.0, 0.0),
             };
 
             self.render_targets.insert(output_name.clone(), render_state);
@@ -598,11 +609,15 @@ impl PointerHandler for App {
                 }
                 PointerEventKind::Motion { .. } => {
                     let (x, y) = event.position;
-                    let offset_x = (x as f32 / output_w) - 0.5;
-                    let offset_y = (y as f32 / output_h) - 0.5;
+                    let target_x = (x as f32 / output_w) - 0.5;
+                    let target_y = (y as f32 / output_h) - 0.5;
                     let intensity = self.config.intensity_for(&output_name);
-                    if let Some(renderer) = &self.renderer {
-                        renderer.update_uniforms(offset_x, offset_y, intensity);
+                    if let (Some(renderer), Some(rt)) = (
+                        &self.renderer,
+                        self.render_targets.get_mut(&output_name),
+                    ) {
+                        rt.target_offset = (target_x, target_y);
+                        rt.step_and_write(&renderer.queue, intensity);
                     }
                     self.render_output(qh, &output_name);
                 }

@@ -8,6 +8,31 @@ pub struct OutputRenderState {
     pub config: wgpu::SurfaceConfiguration,
     pub bind_group: wgpu::BindGroup,
     pub color_view: wgpu::TextureView,
+    pub uniform_buffer: wgpu::Buffer,
+    pub current_offset: (f32, f32),
+    pub target_offset: (f32, f32),
+}
+
+impl OutputRenderState {
+    /// Step the lerp toward target_offset and write the new uniform value.
+    /// Step factor 0.3 matches hyprland mode smoothing — small enough to
+    /// look smooth, advances per pointer event so it tracks input rate.
+    pub fn step_and_write(&mut self, queue: &wgpu::Queue, intensity: f32) {
+        let (tx, ty) = self.target_offset;
+        let (cx, cy) = self.current_offset;
+        let nx = cx + (tx - cx) * 0.3;
+        let ny = cy + (ty - cy) * 0.3;
+        self.current_offset = (nx, ny);
+        let data = [nx, ny, intensity, 0.0f32];
+        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&data));
+    }
+
+    /// Write uniforms directly without lerping. Used by hyprland mode
+    /// where cursor.rs already smooths.
+    pub fn write_uniforms_direct(&self, queue: &wgpu::Queue, x: f32, y: f32, intensity: f32) {
+        let data = [x, y, intensity, 0.0f32];
+        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&data));
+    }
 }
 
 pub struct Renderer {
@@ -20,7 +45,6 @@ pub struct Renderer {
     pub sampler: wgpu::Sampler,
     _depth_placeholder: wgpu::Texture,
     pub depth_view: wgpu::TextureView,
-    pub uniform_buffer: wgpu::Buffer,
 }
 
 impl Renderer {
@@ -148,13 +172,6 @@ impl Renderer {
         let depth_placeholder = create_placeholder_depth(&device, &queue);
         let depth_view = depth_placeholder.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let uniform_data = [0.0f32, 0.0, 0.025, 0.0];
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("uniforms"),
-            contents: bytemuck::cast_slice(&uniform_data),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
         Ok(Self {
             instance,
             adapter,
@@ -165,13 +182,18 @@ impl Renderer {
             sampler,
             _depth_placeholder: depth_placeholder,
             depth_view,
-            uniform_buffer,
         })
     }
 
-    pub fn update_uniforms(&self, offset_x: f32, offset_y: f32, intensity: f32) {
-        let data = [offset_x, offset_y, intensity, 0.0f32];
-        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&data));
+    /// Create a fresh uniform buffer for an output. Called once per
+    /// output during layer surface configure.
+    pub fn create_uniform_buffer(&self) -> wgpu::Buffer {
+        let uniform_data = [0.0f32, 0.0, 0.025, 0.0];
+        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("uniforms"),
+            contents: bytemuck::cast_slice(&uniform_data),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
     }
 
     pub fn upload_depth_map(&self, depth: &crate::depth::DepthMap) -> (wgpu::Texture, wgpu::TextureView) {
@@ -213,7 +235,12 @@ impl Renderer {
         (texture, view)
     }
 
-    pub fn create_bind_group(&self, color_view: &wgpu::TextureView, depth_view: &wgpu::TextureView) -> wgpu::BindGroup {
+    pub fn create_bind_group(
+        &self,
+        color_view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        uniform_buffer: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("depthpaper_bg"),
             layout: &self.bind_group_layout,
@@ -232,7 +259,7 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: self.uniform_buffer.as_entire_binding(),
+                    resource: uniform_buffer.as_entire_binding(),
                 },
             ],
         })
