@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "depthpaper-cli"
+name = "depthpaper"
 path = "src/main.rs"
 
 [dependencies]
@@ -15,6 +15,9 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 image = { workspace = true, features = ["jpeg", "png", "webp"] }
+
+serde = { workspace = true }
+toml = "0.8"
 
 ort = { version = "=2.0.0-rc.12", features = ["cuda"] }
 blake3 = "1"

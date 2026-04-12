@@ -1,4 +1,5 @@
 mod cache;
+mod config;
 mod depth;
 
 use anyhow::{Context, Result};
@@ -9,7 +10,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(name = "depthpaper-cli", version, about = "Bake depth maps and configure depthpaper")]
+#[command(name = "depthpaper", version, about = "Bake depth maps and configure depthpaperd")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -24,17 +25,20 @@ enum Command {
         /// Output directory. Defaults to the depthpaper cache directory.
         #[arg(short, long)]
         out: Option<PathBuf>,
-        /// Path to the Depth Anything ONNX model.
+        /// Path to the Depth Anything ONNX model. Falls back to
+        /// $DEPTHPAPER_MODEL, then [inference] model_path in config.toml.
         #[arg(short, long, env = "DEPTHPAPER_MODEL")]
-        model: PathBuf,
+        model: Option<PathBuf>,
     },
     /// Bake and set as the active wallpaper in the daemon's config.
     Set {
         /// Source image.
         input: PathBuf,
-        /// Path to the Depth Anything ONNX model.
+        /// Path to the Depth Anything ONNX model. Falls back to
+        /// $DEPTHPAPER_MODEL, then [inference] model_path in config.toml.
+        /// When provided, the resolved path is persisted to config.
         #[arg(short, long, env = "DEPTHPAPER_MODEL")]
-        model: PathBuf,
+        model: Option<PathBuf>,
     },
 }
 
@@ -49,11 +53,36 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Bake { input, out, model } => {
+            let model = resolve_model(model)?;
             bake(&input, out.as_deref(), &model)?;
             Ok(())
         }
-        Command::Set { input, model } => set(&input, &model),
+        Command::Set { input, model } => {
+            let model = resolve_model(model)?;
+            set(&input, &model)
+        }
     }
+}
+
+/// Resolve the model path. Clap merges --model and $DEPTHPAPER_MODEL into
+/// `arg`, so by the time we get here a Some means flag-or-env. If still
+/// None, fall through to config, then error.
+fn resolve_model(arg: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(p) = arg {
+        return Ok(p);
+    }
+    if let Some(cfg) = config::try_load()? {
+        return Ok(cfg.inference.model_path);
+    }
+    anyhow::bail!(
+        "no model specified — pass --model, set DEPTHPAPER_MODEL, or add\n\
+         \n\
+         [inference]\n\
+         model_path = \"/path/to/depth_anything_v2.onnx\"\n\
+         \n\
+         to {}",
+        config::config_path().display()
+    )
 }
 
 fn bake(input: &Path, out: Option<&Path>, model: &Path) -> Result<cache::BakedPaths> {
@@ -88,25 +117,15 @@ fn bake(input: &Path, out: Option<&Path>, model: &Path) -> Result<cache::BakedPa
 
 fn set(input: &Path, model: &Path) -> Result<()> {
     let paths = bake(input, None, model)?;
-    update_daemon_config(&paths.color)?;
+    update_daemon_config(&paths, model)?;
     eprintln!();
     eprintln!("wallpaper set. restart the daemon to apply:");
-    eprintln!("  systemctl --user restart depthpaper");
+    eprintln!("  systemctl --user restart depthpaperd");
     Ok(())
 }
 
-fn daemon_config_path() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        PathBuf::from(xdg).join("depthpaper/config.toml")
-    } else if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".config/depthpaper/config.toml")
-    } else {
-        PathBuf::from("config.toml")
-    }
-}
-
-fn update_daemon_config(color_path: &Path) -> Result<()> {
-    let path = daemon_config_path();
+fn update_daemon_config(paths: &cache::BakedPaths, model: &Path) -> Result<()> {
+    let path = config::config_path();
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -129,22 +148,29 @@ fn update_daemon_config(color_path: &Path) -> Result<()> {
         .parse()
         .with_context(|| format!("failed to parse {}", path.display()))?;
 
-    if doc.get("wallpaper").is_none() {
-        doc.insert("wallpaper", toml_edit::Item::Table(toml_edit::Table::new()));
-    }
+    ensure_table(&mut doc, "inference");
+    let inference = doc["inference"]
+        .as_table_mut()
+        .context("config [inference] is not a table")?;
+    inference["model_path"] = value(model.to_string_lossy().into_owned());
 
+    ensure_table(&mut doc, "wallpaper");
     let wallpaper = doc["wallpaper"]
         .as_table_mut()
         .context("config [wallpaper] is not a table")?;
-
-    wallpaper["color"] = value(color_path.to_string_lossy().into_owned());
-    // Clear stale/legacy fields so sibling inference resolves the new depth path
-    wallpaper.remove("depth");
-    wallpaper.remove("path");
+    wallpaper["color"] = value(paths.color.to_string_lossy().into_owned());
+    wallpaper["depth"] = value(paths.depth.to_string_lossy().into_owned());
+    wallpaper.remove("path"); // legacy field from pre-workspace schema
 
     std::fs::write(&path, doc.to_string())
         .with_context(|| format!("failed to write {}", path.display()))?;
 
     info!(path = %path.display(), "daemon config updated");
     Ok(())
+}
+
+fn ensure_table(doc: &mut DocumentMut, key: &str) {
+    if doc.get(key).is_none() {
+        doc.insert(key, toml_edit::Item::Table(toml_edit::Table::new()));
+    }
 }

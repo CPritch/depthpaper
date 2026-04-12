@@ -19,7 +19,7 @@ fn main() -> Result<()> {
         )
         .init();
 
-    info!("starting depthpaper-daemon");
+    info!("starting depthpaperd");
 
     let cfg = config::Config::load()?;
     info!(?cfg, "configuration loaded");
@@ -60,7 +60,7 @@ fn main() -> Result<()> {
         "outputs ready"
     );
 
-    app.init_cursor(cfg.general.cursor_poll_hz);
+    app.init_cursor(cfg.daemon.cursor_poll_hz);
     app.render_all(&qh);
 
     let mut event_loop: calloop::EventLoop<wayland::App> =
@@ -71,7 +71,7 @@ fn main() -> Result<()> {
         .insert(loop_handle.clone())
         .map_err(|e| anyhow::anyhow!("failed to insert Wayland source: {e}"))?;
 
-    let poll_interval = Duration::from_secs_f64(1.0 / cfg.general.cursor_poll_hz as f64);
+    let poll_interval = Duration::from_secs_f64(1.0 / cfg.daemon.cursor_poll_hz as f64);
     let tick_timer = Timer::immediate();
     let qh_tick = qh.clone();
 
@@ -82,7 +82,7 @@ fn main() -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("failed to insert timer source: {e}"))?;
 
-    info!(hz = cfg.general.cursor_poll_hz, "entering calloop event loop");
+    info!(hz = cfg.daemon.cursor_poll_hz, "entering calloop event loop");
 
     while app.running {
         event_loop

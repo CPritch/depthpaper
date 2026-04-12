@@ -413,6 +413,8 @@ dependencies = [
  "directories",
  "image",
  "ort",
+ "serde",
+ "toml",
  "toml_edit",
  "tracing",
  "tracing-subscriber",
