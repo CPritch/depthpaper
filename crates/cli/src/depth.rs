@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::path::Path;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 pub struct DepthMap {
     pub data: Vec<f32>,
@@ -75,18 +75,37 @@ struct InferenceResult {
 }
 
 fn run_inference(model_path: &Path, input: &[f32]) -> Result<InferenceResult> {
-    let mut session = ort::session::Session::builder()
+    match build_session(model_path, true).and_then(|s| run_with_session(s, input)) {
+        Ok(r) => Ok(r),
+        Err(cuda_err) => {
+            warn!("CUDA inference failed ({cuda_err:#}), falling back to CPU");
+            let session = build_session(model_path, false)?;
+            run_with_session(session, input)
+        }
+    }
+}
+
+fn build_session(model_path: &Path, use_cuda: bool) -> Result<ort::session::Session> {
+    let mut builder = ort::session::Session::builder()
         .map_err(|e| anyhow::anyhow!("failed to create ONNX session builder: {e}"))?
         .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
-        .map_err(|e| anyhow::anyhow!("failed to set optimization level: {e}"))?
-        .with_execution_providers([ort::ep::CUDA::default().build()])
-        .map_err(|e| anyhow::anyhow!("failed to set execution providers: {e}"))?
+        .map_err(|e| anyhow::anyhow!("failed to set optimization level: {e}"))?;
+
+    if use_cuda {
+        builder = builder
+            .with_execution_providers([ort::ep::CUDA::default().build()])
+            .map_err(|e| anyhow::anyhow!("failed to set CUDA execution provider: {e}"))?;
+    }
+
+    builder
         .commit_from_file(model_path)
         .map_err(|e| anyhow::anyhow!(
             "failed to load ONNX model from {}: {e}",
             model_path.display()
-        ))?;
+        ))
+}
 
+fn run_with_session(mut session: ort::session::Session, input: &[f32]) -> Result<InferenceResult> {
     let sz = MODEL_INPUT_SIZE as i64;
 
     // Try DA3 (rank 5: [batch, views, C, H, W]) first, fall back to DA2 (rank 4).
