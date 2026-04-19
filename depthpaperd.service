@@ -1,0 +1,15 @@
+[Unit]
+Description=Depthpaper parallax wallpaper daemon
+Documentation=https://github.com/CPritch/depthpaper
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/depthpaperd
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

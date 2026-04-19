@@ -182,8 +182,9 @@ fn set(input: &Path, model: &Path) -> Result<()> {
     let paths = bake(input, None, model)?;
     update_daemon_config(&paths, model)?;
     eprintln!();
-    eprintln!("wallpaper set. restart the daemon to apply:");
-    eprintln!("  systemctl --user restart depthpaperd");
+    eprintln!("wallpaper set. reload the daemon to apply:");
+    eprintln!("  systemctl --user reload depthpaperd");
+    eprintln!("  # or: kill -HUP $(pidof depthpaperd)");
     Ok(())
 }
 

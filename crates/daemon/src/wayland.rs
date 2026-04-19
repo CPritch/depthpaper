@@ -123,6 +123,71 @@ impl App {
         }
     }
 
+    /// Hot-reload config.toml. Reloads wallpaper textures and rebuilds
+    /// bind groups for every output. Tracking mode and idle timeout
+    /// changes require a full restart.
+    pub fn reload_config(&mut self) {
+        let new_cfg = match crate::config::Config::load() {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("SIGHUP reload failed: {e:#}");
+                return;
+            }
+        };
+
+        if new_cfg.daemon.tracking_mode != self.config.daemon.tracking_mode {
+            warn!("tracking_mode changed — restart required to take effect");
+        }
+        if new_cfg.daemon.idle_timeout_secs != self.config.daemon.idle_timeout_secs {
+            warn!("idle_timeout_secs changed — restart required to take effect");
+        }
+
+        let renderer = match &self.renderer {
+            Some(r) => r,
+            None => {
+                self.config = new_cfg;
+                return;
+            }
+        };
+
+        for output in &self.outputs {
+            if !output.configured {
+                continue;
+            }
+            if let Some(rt) = self.render_targets.get_mut(&output.name) {
+                let color_path = new_cfg.color_for(&output.name).to_path_buf();
+                let depth_path = new_cfg.depth_for(&output.name);
+
+                let color_view = match renderer.load_wallpaper_texture(&color_path) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!(name = output.name, "reload: failed to load color: {e:#}");
+                        continue;
+                    }
+                };
+
+                let bind_group = match crate::depth::load_depth_map(&depth_path) {
+                    Ok(depth) => {
+                        let (_tex, view) = renderer.upload_depth_map(&depth);
+                        renderer.create_bind_group(&color_view, &view, &rt.uniform_buffer)
+                    }
+                    Err(e) => {
+                        warn!(name = output.name, "reload: failed to load depth: {e:#}");
+                        renderer.create_bind_group(&color_view, &renderer.depth_view, &rt.uniform_buffer)
+                    }
+                };
+
+                rt.color_view = color_view;
+                rt.bind_group = bind_group;
+                info!(name = output.name, "reloaded wallpaper");
+            }
+        }
+
+        self.config = new_cfg;
+        self.needs_render = true;
+        info!("config reloaded via SIGHUP");
+    }
+
     pub fn init_cursor(&mut self, poll_hz: u32) {
         match CursorPoller::new(poll_hz) {
             Some(c) => {

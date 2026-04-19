@@ -8,12 +8,24 @@ mod wayland;
 
 use anyhow::{Context, Result};
 use calloop::timer::{TimeoutAction, Timer};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use wayland_client::Connection;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const BATTERY_POLL_INTERVAL: Duration = Duration::from_secs(30);
+const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_millis(500);
+
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+static RELOAD: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn handle_shutdown(_: std::ffi::c_int) {
+    SHUTDOWN.store(true, Ordering::Relaxed);
+}
+extern "C" fn handle_reload(_: std::ffi::c_int) {
+    RELOAD.store(true, Ordering::Relaxed);
+}
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -24,6 +36,8 @@ fn main() -> Result<()> {
         .init();
 
     info!("starting depthpaperd");
+
+    install_signal_handlers();
 
     let cfg = config::Config::load()?;
     info!(?cfg, "configuration loaded");
@@ -64,7 +78,6 @@ fn main() -> Result<()> {
         "outputs ready"
     );
 
-    // Bind ext-idle-notify-v1 now that the seat is known.
     app.idle = idle::try_bind(
         &globals,
         &qh,
@@ -72,7 +85,6 @@ fn main() -> Result<()> {
         cfg.daemon.idle_timeout_secs,
     );
 
-    // Initial battery poll so the gate is correct on the first frame.
     app.refresh_battery();
 
     match cfg.daemon.tracking_mode {
@@ -110,8 +122,6 @@ fn main() -> Result<()> {
         info!(hz = cfg.daemon.cursor_poll_hz, "hyprland tick timer inserted");
     }
 
-    // Battery refresh timer (always runs; the threshold check inside
-    // refresh_battery handles the disabled case).
     loop_handle
         .insert_source(
             Timer::from_duration(BATTERY_POLL_INTERVAL),
@@ -126,15 +136,52 @@ fn main() -> Result<()> {
 
     while app.running {
         event_loop
-            .dispatch(None, &mut app)
+            .dispatch(Some(SIGNAL_CHECK_INTERVAL), &mut app)
             .context("calloop dispatch error")?;
 
-        // Drain one-shot render requests from gate transitions.
+        if SHUTDOWN.swap(false, Ordering::Relaxed) {
+            info!("received shutdown signal, exiting");
+            app.running = false;
+        }
+
+        if RELOAD.swap(false, Ordering::Relaxed) {
+            info!("received SIGHUP, reloading config");
+            app.reload_config();
+        }
+
         if app.needs_render {
             app.needs_render = false;
             app.render_all(&qh);
         }
     }
 
+    info!("depthpaperd exiting");
     Ok(())
+}
+
+fn install_signal_handlers() {
+    use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+
+    let shutdown = SigAction::new(
+        SigHandler::Handler(handle_shutdown),
+        SaFlags::SA_RESTART,
+        SigSet::empty(),
+    );
+    let reload = SigAction::new(
+        SigHandler::Handler(handle_reload),
+        SaFlags::SA_RESTART,
+        SigSet::empty(),
+    );
+
+    unsafe {
+        if let Err(e) = sigaction(Signal::SIGTERM, &shutdown) {
+            warn!("failed to install SIGTERM handler: {e}");
+        }
+        if let Err(e) = sigaction(Signal::SIGINT, &shutdown) {
+            warn!("failed to install SIGINT handler: {e}");
+        }
+        if let Err(e) = sigaction(Signal::SIGHUP, &reload) {
+            warn!("failed to install SIGHUP handler: {e}");
+        }
+    }
 }
