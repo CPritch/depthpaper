@@ -1,6 +1,8 @@
+mod battery;
 mod config;
 mod cursor;
 mod depth;
+mod idle;
 mod renderer;
 mod wayland;
 
@@ -10,6 +12,8 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use wayland_client::Connection;
 use std::time::Duration;
+
+const BATTERY_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -60,6 +64,17 @@ fn main() -> Result<()> {
         "outputs ready"
     );
 
+    // Bind ext-idle-notify-v1 now that the seat is known.
+    app.idle = idle::try_bind(
+        &globals,
+        &qh,
+        app.seat.as_ref(),
+        cfg.daemon.idle_timeout_secs,
+    );
+
+    // Initial battery poll so the gate is correct on the first frame.
+    app.refresh_battery();
+
     match cfg.daemon.tracking_mode {
         config::TrackingMode::Hyprland => {
             info!("tracking mode: hyprland (IPC polling)");
@@ -80,9 +95,6 @@ fn main() -> Result<()> {
         .insert(loop_handle.clone())
         .map_err(|e| anyhow::anyhow!("failed to insert Wayland source: {e}"))?;
 
-    // Hyprland mode polls on a timer. Pointer mode is event-driven via
-    // the Wayland source, no timer, no rendering when the pointer is
-    // off-surface,
     if matches!(cfg.daemon.tracking_mode, config::TrackingMode::Hyprland) {
         let poll_interval = Duration::from_secs_f64(1.0 / cfg.daemon.cursor_poll_hz as f64);
         let tick_timer = Timer::immediate();
@@ -98,12 +110,30 @@ fn main() -> Result<()> {
         info!(hz = cfg.daemon.cursor_poll_hz, "hyprland tick timer inserted");
     }
 
+    // Battery refresh timer (always runs; the threshold check inside
+    // refresh_battery handles the disabled case).
+    loop_handle
+        .insert_source(
+            Timer::from_duration(BATTERY_POLL_INTERVAL),
+            move |_deadline, _metadata, app: &mut wayland::App| {
+                app.refresh_battery();
+                TimeoutAction::ToDuration(BATTERY_POLL_INTERVAL)
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("failed to insert battery timer: {e}"))?;
+
     info!("entering calloop event loop");
 
     while app.running {
         event_loop
             .dispatch(None, &mut app)
             .context("calloop dispatch error")?;
+
+        // Drain one-shot render requests from gate transitions.
+        if app.needs_render {
+            app.needs_render = false;
+            app.render_all(&qh);
+        }
     }
 
     Ok(())

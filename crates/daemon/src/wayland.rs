@@ -59,8 +59,13 @@ pub struct App {
     pub render_targets: HashMap<String, OutputRenderState>,
     pub cursor: Option<CursorPoller>,
     pub pointer: Option<wl_pointer::WlPointer>,
-    /// Name of the output the pointer is currently over, in pointer mode.
+    pub seat: Option<wl_seat::WlSeat>,
     pub pointer_active_output: Option<String>,
+    pub idle: Option<crate::idle::IdleState>,
+    pub battery_ok: bool,
+    /// Set by gate transitions (idle resume, battery resume) to request
+    /// a one-shot render from the main loop after dispatch returns.
+    pub needs_render: bool,
     pub running: bool,
 }
 
@@ -88,9 +93,34 @@ impl App {
             render_targets: HashMap::new(),
             cursor: None,
             pointer: None,
+            seat: None,
             pointer_active_output: None,
+            idle: None,
+            battery_ok: true,
+            needs_render: false,
             running: true,
         })
+    }
+
+    /// True if rendering should currently happen. Combines idle state
+    /// (set by ext-idle-notify-v1 events) and battery state (refreshed
+    /// by a slow calloop timer).
+    pub fn render_allowed(&self) -> bool {
+        let not_idle = self.idle.as_ref().map(|i| !i.idle).unwrap_or(true);
+        not_idle && self.battery_ok
+    }
+
+    /// Refresh the battery_ok flag from sysfs. Called from a slow timer.
+    pub fn refresh_battery(&mut self) {
+        let state = crate::battery::read();
+        let allowed = crate::battery::render_allowed(state, self.config.daemon.battery_threshold);
+        if allowed != self.battery_ok {
+            tracing::info!(allowed, ?state, "battery gate changed");
+            self.battery_ok = allowed;
+            if allowed {
+                self.needs_render = true;
+            }
+        }
     }
 
     pub fn init_cursor(&mut self, poll_hz: u32) {
@@ -181,6 +211,9 @@ impl App {
     }
 
     pub fn render_all(&self, qh: &QueueHandle<Self>) {
+        if !self.render_allowed() {
+            return;
+        }
         let renderer = match &self.renderer {
             Some(r) => r,
             None => return,
@@ -201,6 +234,9 @@ impl App {
     /// Render a single named output. Used by pointer mode to avoid
     /// re-rendering monitors that didn't receive the cursor event.
     pub fn render_output(&self, qh: &QueueHandle<Self>, output_name: &str) {
+        if !self.render_allowed() {
+            return;
+        }
         let renderer = match &self.renderer {
             Some(r) => r,
             None => return,
@@ -522,7 +558,11 @@ impl SeatHandler for App {
         &mut self.seat_state
     }
 
-    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
+        if self.seat.is_none() {
+            self.seat = Some(seat);
+        }
+    }
 
     fn new_capability(
         &mut self,

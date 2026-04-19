@@ -18,8 +18,9 @@ pub struct DaemonConfig {
     #[serde(default = "default_intensity")]
     pub parallax_intensity: f32,
     #[serde(default = "default_idle_timeout")]
-    #[allow(dead_code)] // Phase 3: idle detection
     pub idle_timeout_secs: u64,
+    #[serde(default = "default_battery_threshold")]
+    pub battery_threshold: u8,
     #[serde(default)]
     pub tracking_mode: TrackingMode,
 }
@@ -58,6 +59,7 @@ impl Default for DaemonConfig {
             cursor_poll_hz: default_poll_hz(),
             parallax_intensity: default_intensity(),
             idle_timeout_secs: default_idle_timeout(),
+            battery_threshold: default_battery_threshold(),
             tracking_mode: TrackingMode::default(),
         }
     }
@@ -65,7 +67,8 @@ impl Default for DaemonConfig {
 
 fn default_poll_hz() -> u32 { 60 }
 fn default_intensity() -> f32 { 0.025 }
-fn default_idle_timeout() -> u64 { 5 }
+fn default_idle_timeout() -> u64 { 300 }
+fn default_battery_threshold() -> u8 { 20 }
 
 impl Config {
     pub fn load() -> Result<Self> {
