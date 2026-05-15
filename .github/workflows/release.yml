@@ -18,6 +18,9 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y libwayland-dev libxkbcommon-dev
+
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
@@ -63,7 +66,3 @@ jobs:
             systemctl --user enable --now shiftpaperd
             ```
 
-            ### Arch Linux (AUR)
-            ```bash
-            yay -S shiftpaper-git
-            ```
