@@ -1,8 +1,8 @@
 use tracing::{debug, info, warn};
 use wayland_client::{
+    Connection, Dispatch, QueueHandle,
     globals::{BindError, GlobalList},
     protocol::wl_seat,
-    Connection, Dispatch, QueueHandle,
 };
 use wayland_protocols::ext::idle_notify::v1::client::{
     ext_idle_notification_v1::{self, ExtIdleNotificationV1},

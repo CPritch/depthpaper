@@ -17,5 +17,9 @@ pub fn load_depth_map(path: &Path) -> Result<DepthMap> {
     let (width, height) = luma.dimensions();
     let data = luma.into_raw();
 
-    Ok(DepthMap { data, width, height })
+    Ok(DepthMap {
+        data,
+        width,
+        height,
+    })
 }

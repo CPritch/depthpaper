@@ -40,8 +40,5 @@ pub fn render_allowed(state: Option<BatteryState>, threshold: u8) -> bool {
     if threshold == 0 {
         return true;
     }
-    match state {
-        Some(s) if s.discharging && s.capacity < threshold => false,
-        _ => true,
-    }
+    !matches!(state, Some(s) if s.discharging && s.capacity < threshold)
 }

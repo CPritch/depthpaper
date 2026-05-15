@@ -46,15 +46,24 @@ pub fn estimate(rgba: &image::RgbaImage, model_path: &Path) -> Result<DepthMap> 
     // Normalize to [0, 1] with 1.0 = closest.
     // DA2 outputs inverse depth (higher = closer) — already correct.
     // DA3 outputs direct depth (higher = farther) — needs inversion.
-    let (d_min, d_max) = raw_depth.data.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &v| {
-        (mn.min(v), mx.max(v))
-    });
+    let (d_min, d_max) = raw_depth
+        .data
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(mn, mx), &v| (mn.min(v), mx.max(v)));
     let range = (d_max - d_min).max(1e-6);
 
     let normalized: Vec<f32> = if raw_depth.invert {
-        raw_depth.data.iter().map(|&v| 1.0 - (v - d_min) / range).collect()
+        raw_depth
+            .data
+            .iter()
+            .map(|&v| 1.0 - (v - d_min) / range)
+            .collect()
     } else {
-        raw_depth.data.iter().map(|&v| (v - d_min) / range).collect()
+        raw_depth
+            .data
+            .iter()
+            .map(|&v| (v - d_min) / range)
+            .collect()
     };
 
     let data = resize_depth(
@@ -65,7 +74,11 @@ pub fn estimate(rgba: &image::RgbaImage, model_path: &Path) -> Result<DepthMap> 
         orig_h,
     );
 
-    Ok(DepthMap { data, width: orig_w, height: orig_h })
+    Ok(DepthMap {
+        data,
+        width: orig_w,
+        height: orig_h,
+    })
 }
 
 struct InferenceResult {
@@ -97,12 +110,12 @@ fn build_session(model_path: &Path, use_cuda: bool) -> Result<ort::session::Sess
             .map_err(|e| anyhow::anyhow!("failed to set CUDA execution provider: {e}"))?;
     }
 
-    builder
-        .commit_from_file(model_path)
-        .map_err(|e| anyhow::anyhow!(
+    builder.commit_from_file(model_path).map_err(|e| {
+        anyhow::anyhow!(
             "failed to load ONNX model from {}: {e}",
             model_path.display()
-        ))
+        )
+    })
 }
 
 fn run_with_session(mut session: ort::session::Session, input: &[f32]) -> Result<InferenceResult> {
@@ -119,7 +132,10 @@ fn run_with_session(mut session: ort::session::Session, input: &[f32]) -> Result
                 let (_shape, d) = outputs[0]
                     .try_extract_tensor::<f32>()
                     .map_err(|e| anyhow::anyhow!("failed to extract output: {e}"))?;
-                Ok(InferenceResult { data: d.to_vec(), invert: true })
+                Ok(InferenceResult {
+                    data: d.to_vec(),
+                    invert: true,
+                })
             }
             Err(_) => {
                 debug!("rank-5 failed, retrying with rank-4 input (DA2)");
@@ -135,14 +151,18 @@ fn run_with_session(mut session: ort::session::Session, input: &[f32]) -> Result
     let data: Box<[f32]> = input.to_vec().into_boxed_slice();
     let tensor = ort::value::Tensor::<f32>::from_array((vec![1i64, 3, sz, sz], data))
         .map_err(|e| anyhow::anyhow!("failed to create input tensor: {e}"))?;
-    let outputs = session.run(ort::inputs![tensor])
+    let outputs = session
+        .run(ort::inputs![tensor])
         .map_err(|e| anyhow::anyhow!("inference failed with both rank-5 and rank-4: {e}"))?;
 
     let (_shape, data) = outputs[0]
         .try_extract_tensor::<f32>()
         .map_err(|e| anyhow::anyhow!("failed to extract output: {e}"))?;
 
-    Ok(InferenceResult { data: data.to_vec(), invert: false })
+    Ok(InferenceResult {
+        data: data.to_vec(),
+        invert: false,
+    })
 }
 
 fn resize_depth(src: &[f32], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<f32> {

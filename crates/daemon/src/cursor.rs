@@ -70,8 +70,8 @@ impl CursorPoller {
         self.offset_y += (target_y - self.offset_y) * smoothing;
 
         // Consider "changed" if offset moved by more than a tiny epsilon
-        self.changed = (self.offset_x - prev_x).abs() > 1e-5
-            || (self.offset_y - prev_y).abs() > 1e-5;
+        self.changed =
+            (self.offset_x - prev_x).abs() > 1e-5 || (self.offset_y - prev_y).abs() > 1e-5;
 
         self.changed
     }
@@ -94,7 +94,9 @@ fn hyprland_socket_path() -> Option<PathBuf> {
 
 fn query_cursor_pos(socket_path: &PathBuf) -> Option<(f32, f32)> {
     let mut stream = UnixStream::connect(socket_path).ok()?;
-    stream.set_read_timeout(Some(Duration::from_millis(50))).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .ok()?;
     stream.write_all(b"cursorpos").ok()?;
 
     let mut buf = [0u8; 64];

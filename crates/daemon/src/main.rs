@@ -8,11 +8,11 @@ mod wayland;
 
 use anyhow::{Context, Result};
 use calloop::timer::{TimeoutAction, Timer};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use wayland_client::Connection;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 const BATTERY_POLL_INTERVAL: Duration = Duration::from_secs(30);
 const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_millis(500);
@@ -42,8 +42,7 @@ fn main() -> Result<()> {
     let cfg = config::Config::load()?;
     info!(?cfg, "configuration loaded");
 
-    let conn = Connection::connect_to_env()
-        .context("failed to connect to Wayland display")?;
+    let conn = Connection::connect_to_env().context("failed to connect to Wayland display")?;
 
     let (globals, mut event_queue) =
         wayland_client::globals::registry_queue_init::<wayland::App>(&conn)
@@ -113,13 +112,19 @@ fn main() -> Result<()> {
         let qh_tick = qh.clone();
 
         loop_handle
-            .insert_source(tick_timer, move |_deadline, _metadata, app: &mut wayland::App| {
-                app.tick(&qh_tick);
-                TimeoutAction::ToDuration(poll_interval)
-            })
+            .insert_source(
+                tick_timer,
+                move |_deadline, _metadata, app: &mut wayland::App| {
+                    app.tick(&qh_tick);
+                    TimeoutAction::ToDuration(poll_interval)
+                },
+            )
             .map_err(|e| anyhow::anyhow!("failed to insert timer source: {e}"))?;
 
-        info!(hz = cfg.daemon.cursor_poll_hz, "hyprland tick timer inserted");
+        info!(
+            hz = cfg.daemon.cursor_poll_hz,
+            "hyprland tick timer inserted"
+        );
     }
 
     loop_handle
@@ -160,7 +165,7 @@ fn main() -> Result<()> {
 }
 
 fn install_signal_handlers() {
-    use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+    use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 
     let shutdown = SigAction::new(
         SigHandler::Handler(handle_shutdown),

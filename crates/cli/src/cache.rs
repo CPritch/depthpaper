@@ -59,12 +59,9 @@ pub fn write_depth(depth: &DepthMap, path: &Path) -> Result<()> {
         .map(|&v| (v.clamp(0.0, 1.0) * 65535.0).round() as u16)
         .collect();
 
-    let buffer = image::ImageBuffer::<image::Luma<u16>, _>::from_raw(
-        depth.width,
-        depth.height,
-        pixels,
-    )
-    .context("failed to build depth image buffer")?;
+    let buffer =
+        image::ImageBuffer::<image::Luma<u16>, _>::from_raw(depth.width, depth.height, pixels)
+            .context("failed to build depth image buffer")?;
 
     buffer
         .save(path)

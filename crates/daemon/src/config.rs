@@ -65,10 +65,18 @@ impl Default for DaemonConfig {
     }
 }
 
-fn default_poll_hz() -> u32 { 60 }
-fn default_intensity() -> f32 { 0.025 }
-fn default_idle_timeout() -> u64 { 300 }
-fn default_battery_threshold() -> u8 { 20 }
+fn default_poll_hz() -> u32 {
+    60
+}
+fn default_intensity() -> f32 {
+    0.025
+}
+fn default_idle_timeout() -> u64 {
+    300
+}
+fn default_battery_threshold() -> u8 {
+    20
+}
 
 impl Config {
     pub fn load() -> Result<Self> {
@@ -78,8 +86,7 @@ impl Config {
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read config at {}", path.display()))?;
 
-        let mut cfg: Config =
-            toml::from_str(&text).with_context(|| "failed to parse config")?;
+        let mut cfg: Config = toml::from_str(&text).with_context(|| "failed to parse config")?;
 
         cfg.wallpaper.color = expand_tilde(&cfg.wallpaper.color);
         if let Some(ref mut p) = cfg.wallpaper.depth {
@@ -154,10 +161,10 @@ fn config_path() -> PathBuf {
 }
 
 fn expand_tilde(p: &Path) -> PathBuf {
-    if let Ok(stripped) = p.strip_prefix("~") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(stripped);
-        }
+    if let Ok(stripped) = p.strip_prefix("~")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return PathBuf::from(home).join(stripped);
     }
     p.to_path_buf()
 }
