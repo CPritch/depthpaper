@@ -1,11 +1,12 @@
 mod cache;
 mod config;
 mod depth;
+mod fetch_model;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
-use toml_edit::{value, DocumentMut};
+use toml_edit::{DocumentMut, value};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -19,7 +20,7 @@ use tracing_subscriber::EnvFilter;
                   parallax wallpaper daemon. Use it to convert source images \
                   into the color + 16-bit depth pairs the daemon renders, set \
                   the active wallpaper, and switch cursor tracking modes.",
-    propagate_version = true,
+    propagate_version = true
 )]
 struct Cli {
     #[command(subcommand)]
@@ -62,6 +63,21 @@ enum Command {
         /// When provided, the resolved path is persisted to config.
         #[arg(short, long, env = "SHIFTPAPER_MODEL")]
         model: Option<PathBuf>,
+    },
+
+    /// Download the default depth model from HuggingFace.
+    ///
+    /// Downloads Depth Anything V2 Small (ONNX) from the onnx-community
+    /// repository to ~/.local/share/shiftpaper/models/ and writes the path
+    /// to [inference] model_path in config.toml. Safe to re-run — skips
+    /// the download if the file already exists unless --force is given.
+    FetchModel {
+        /// Override the download URL. Defaults to the canonical HuggingFace release.
+        #[arg(long)]
+        url: Option<String>,
+        /// Re-download even if the file already exists.
+        #[arg(long, short)]
+        force: bool,
     },
 
     /// Show or change the cursor tracking mode.
@@ -123,28 +139,43 @@ fn main() -> Result<()> {
             let model = resolve_model(model)?;
             set(&input, &model)
         }
+        Command::FetchModel { url, force } => fetch_model_cmd(url.as_deref(), force),
         Command::Mode { mode } => mode_cmd(mode),
     }
 }
 
 /// Resolve the model path. Clap merges --model and $SHIFTPAPER_MODEL into
-/// `arg`, so by the time we get here a Some means flag-or-env. If still
-/// None, fall through to config, then error.
+/// `arg`, so by the time we get here a Some means flag-or-env. Falls through
+/// to the config file, then the default fetch-model location, then errors.
 fn resolve_model(arg: Option<PathBuf>) -> Result<PathBuf> {
+    // 1. --model flag or $SHIFTPAPER_MODEL
     if let Some(p) = arg {
         return Ok(p);
     }
-    if let Some(cfg) = config::try_load()? {
-        return Ok(cfg.inference.model_path);
+    // 2. [inference] model_path in config.toml
+    if let Some(cfg) = config::try_load()?
+        && let Some(inference) = cfg.inference
+    {
+        let p = inference.model_path;
+        if p.exists() {
+            return Ok(p);
+        }
+        eprintln!(
+            "warning: configured model path {} not found, checking default location",
+            p.display()
+        );
     }
+    // 3. Default location written by `shiftpaper fetch-model`
+    let default = fetch_model::default_model_path();
+    if default.exists() {
+        return Ok(default);
+    }
+    // 4. Friendly error
     anyhow::bail!(
-        "no model specified — pass --model, set SHIFTPAPER_MODEL, or add\n\
+        "no model found.\n\
          \n\
-         [inference]\n\
-         model_path = \"/path/to/depth_anything_v2.onnx\"\n\
-         \n\
-         to {}",
-        config::config_path().display()
+         Run `shiftpaper fetch-model` to download the default model, or\n\
+         pass --model /path/to/model.onnx, or set $SHIFTPAPER_MODEL."
     )
 }
 
@@ -214,8 +245,7 @@ fn read_tracking_mode() -> Result<Option<String>> {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {
-            return Err(anyhow::Error::new(e)
-                .context(format!("failed to read {}", path.display())));
+            return Err(anyhow::Error::new(e).context(format!("failed to read {}", path.display())));
         }
     };
 
@@ -245,8 +275,7 @@ fn update_tracking_mode(mode: TrackingMode) -> Result<()> {
             String::new()
         }
         Err(e) => {
-            return Err(anyhow::Error::new(e)
-                .context(format!("failed to read {}", path.display())));
+            return Err(anyhow::Error::new(e).context(format!("failed to read {}", path.display())));
         }
     };
 
@@ -282,8 +311,7 @@ fn update_daemon_config(paths: &cache::BakedPaths, model: &Path) -> Result<()> {
             String::new()
         }
         Err(e) => {
-            return Err(anyhow::Error::new(e)
-                .context(format!("failed to read {}", path.display())));
+            return Err(anyhow::Error::new(e).context(format!("failed to read {}", path.display())));
         }
     };
 
@@ -316,4 +344,15 @@ fn ensure_table(doc: &mut DocumentMut, key: &str) {
     if doc.get(key).is_none() {
         doc.insert(key, toml_edit::Item::Table(toml_edit::Table::new()));
     }
+}
+
+fn fetch_model_cmd(url: Option<&str>, force: bool) -> Result<()> {
+    let dest = fetch_model::default_model_path();
+    let url = url.unwrap_or(fetch_model::DEFAULT_MODEL_URL);
+    fetch_model::fetch_model(url, &dest, force)?;
+    fetch_model::persist_model_path(&dest)?;
+    eprintln!();
+    eprintln!("model configured. you can now run:");
+    eprintln!("  shiftpaper set ~/Pictures/wallpaper.jpg");
+    Ok(())
 }

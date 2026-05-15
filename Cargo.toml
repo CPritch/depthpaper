@@ -6,6 +6,8 @@ members = ["crates/daemon", "crates/cli"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+repository = "https://github.com/CPritch/shiftpaper"
+homepage = "https://github.com/CPritch/shiftpaper"
 
 [workspace.dependencies]
 anyhow = "1"

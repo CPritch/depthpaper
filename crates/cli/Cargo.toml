@@ -9,6 +9,11 @@ license.workspace = true
 name = "shiftpaper"
 path = "src/main.rs"
 
+[features]
+default = ["cuda"]
+cuda = ["ort/cuda"]
+load-dynamic = ["ort/load-dynamic"]
+
 [dependencies]
 anyhow = { workspace = true }
 tracing = { workspace = true }
@@ -19,9 +24,11 @@ image = { workspace = true, features = ["jpeg", "png", "webp"] }
 serde = { workspace = true }
 toml = "0.8"
 
-ort = { version = "=2.0.0-rc.12", features = ["cuda"] }
+ort = { version = "=2.0.0-rc.12" }
 blake3 = "1"
 
 clap = { version = "4", features = ["derive", "env"] }
 toml_edit = "0.22"
 directories = "5"
+ureq = "3"
+indicatif = "0.17"

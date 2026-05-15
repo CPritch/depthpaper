@@ -4,7 +4,11 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
-    pub inference: InferenceConfig,
+    /// Optional so the CLI can parse a config that predates the first
+    /// `fetch-model` or `set` call, or a daemon-only config with no
+    /// [inference] section.
+    #[serde(default)]
+    pub inference: Option<InferenceConfig>,
     /// Optional so the CLI can still parse a fresh config file before
     /// the wallpaper section has been written by the first `set` call.
     #[serde(default)]
@@ -42,15 +46,16 @@ pub fn try_load() -> Result<Option<Config>> {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {
-            return Err(anyhow::Error::new(e)
-                .context(format!("failed to read {}", path.display())));
+            return Err(anyhow::Error::new(e).context(format!("failed to read {}", path.display())));
         }
     };
 
-    let mut cfg: Config = toml::from_str(&text)
-        .with_context(|| format!("failed to parse {}", path.display()))?;
+    let mut cfg: Config =
+        toml::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))?;
 
-    cfg.inference.model_path = expand_tilde(&cfg.inference.model_path);
+    if let Some(ref mut i) = cfg.inference {
+        i.model_path = expand_tilde(&i.model_path);
+    }
     if let Some(ref mut w) = cfg.wallpaper {
         w.color = expand_tilde(&w.color);
         if let Some(ref mut d) = w.depth {
@@ -62,10 +67,10 @@ pub fn try_load() -> Result<Option<Config>> {
 }
 
 fn expand_tilde(p: &Path) -> PathBuf {
-    if let Ok(stripped) = p.strip_prefix("~") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(stripped);
-        }
+    if let Ok(stripped) = p.strip_prefix("~")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return PathBuf::from(home).join(stripped);
     }
     p.to_path_buf()
 }
