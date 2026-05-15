@@ -15,10 +15,11 @@ The daemon has no ML dependencies. All inference happens in the CLI.
 
 ## Dependencies
 
-- Wayland compositor with wlr-layer-shell support
+- Wayland compositor with wlr-layer-shell support (see [Supported compositors](#supported-compositors))
 - Vulkan-capable GPU
-- A Depth Anything ONNX model (v2-small recommended)
 - Rust toolchain
+
+The depth model is downloaded automatically by `shiftpaper fetch-model`.
 
 ## Install
 
@@ -30,10 +31,19 @@ cargo install --path crates/daemon
 ## Quick start
 
 ```
-shiftpaper set ~/Pictures/wallpaper.jpg --model ~/path/to/depth_anything_v2_small.onnx
+shiftpaper fetch-model
+shiftpaper set ~/Pictures/wallpaper.jpg
 ```
 
-This bakes the image (first run only), writes the config, and tells you to reload the daemon. The model path is saved to config so you only need `--model` once.
+`fetch-model` downloads Depth Anything V2 Small (~97 MB) from HuggingFace to `~/.local/share/shiftpaper/models/` and saves the path to config. After that, `set` needs no `--model` flag.
+
+If you already have a model, skip fetch-model and pass it directly:
+
+```
+shiftpaper set ~/Pictures/wallpaper.jpg --model ~/path/to/model.onnx
+```
+
+The model path is saved to config so `--model` is only needed once.
 
 ## Running the daemon
 
@@ -57,6 +67,15 @@ Change wallpapers without restarting:
 shiftpaper set ~/Pictures/new_wallpaper.jpg
 systemctl --user reload shiftpaperd
 ```
+
+## CLI reference
+
+| Command | Description |
+|---------|-------------|
+| `shiftpaper fetch-model` | Download the default depth model from HuggingFace |
+| `shiftpaper set <image>` | Bake an image and set it as the active wallpaper |
+| `shiftpaper bake <image>` | Bake an image without changing the active wallpaper |
+| `shiftpaper mode [pointer\|hyprland]` | Show or set the cursor tracking mode |
 
 ## Config
 
@@ -83,6 +102,19 @@ color = "~/.cache/shiftpaper/wallpapers/abc123.color.png"
 **pointer** (default): Uses Wayland pointer events. Works on any wlr-layer-shell compositor. Parallax only active when the cursor is over visible desktop. Stops rendering entirely when the cursor is over a window, which is good for battery.
 
 **hyprland**: Polls the Hyprland IPC socket for global cursor position. Parallax stays active even when windows cover the desktop. Hyprland-only. Note that this lets the daemon observe cursor position over arbitrary windows.
+
+## Supported compositors
+
+Requires [wlr-layer-shell](https://wayland.app/protocols/wlr-layer-shell-unstable-v1). Tested compositors:
+
+- Hyprland
+- Sway
+- River
+- Wayfire
+- niri
+- labwc
+
+GNOME and KDE Plasma do not implement wlr-layer-shell and are not supported.
 
 ## License
 
