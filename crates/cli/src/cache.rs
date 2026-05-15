@@ -9,11 +9,11 @@ pub struct BakedPaths {
     pub depth: PathBuf,
 }
 
-/// Default cache directory: `~/.cache/depthpaper/wallpapers/`.
+/// Default cache directory: `~/.cache/shiftpaper/wallpapers/`.
 pub fn cache_dir() -> PathBuf {
-    directories::ProjectDirs::from("", "", "depthpaper")
+    directories::ProjectDirs::from("", "", "shiftpaper")
         .map(|dirs| dirs.cache_dir().join("wallpapers"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/depthpaper-cache/wallpapers"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/shiftpaper-cache/wallpapers"))
 }
 
 /// Blake3 of the decoded RGBA bytes. Matches the key the daemon's old

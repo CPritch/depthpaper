@@ -1,12 +1,12 @@
 [package]
-name = "depthpaper-cli"
-description = "Depthpaper CLI: bake wallpapers and configure the daemon"
+name = "shiftpaper-cli"
+description = "Shiftpaper CLI: bake wallpapers and configure the daemon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "depthpaper"
+name = "shiftpaper"
 path = "src/main.rs"
 
 [dependencies]

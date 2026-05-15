@@ -9,7 +9,7 @@ pub struct DepthMap {
     pub height: u32,
 }
 
-/// Load a 16-bit grayscale PNG produced by `depthpaper-cli bake`.
+/// Load a 16-bit grayscale PNG produced by `shiftpaper-cli bake`.
 pub fn load_depth_map(path: &Path) -> Result<DepthMap> {
     let img = image::open(path)
         .with_context(|| format!("failed to open depth map: {}", path.display()))?;

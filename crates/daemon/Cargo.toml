@@ -1,12 +1,12 @@
 [package]
-name = "depthpaper-daemon"
+name = "shiftpaper-daemon"
 description = "Parallax wallpaper daemon for Wayland"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "depthpaperd"
+name = "shiftpaperd"
 path = "src/main.rs"
 
 [dependencies]

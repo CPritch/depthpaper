@@ -1,12 +1,12 @@
 [Unit]
-Description=Depthpaper parallax wallpaper daemon
-Documentation=https://github.com/CPritch/depthpaper
+Description=Shiftpaper parallax wallpaper daemon
+Documentation=https://github.com/CPritch/shiftpaper
 PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.cargo/bin/depthpaperd
+ExecStart=%h/.cargo/bin/shiftpaperd
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3

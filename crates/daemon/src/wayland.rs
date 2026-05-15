@@ -259,7 +259,7 @@ impl App {
                     qh,
                     surface,
                     Layer::Background,
-                    Some("depthpaper"),
+                    Some("shiftpaper"),
                     Some(&o.wl_output),
                 );
 
@@ -432,7 +432,7 @@ impl OutputHandler for App {
                 qh,
                 surface,
                 Layer::Background,
-                Some("depthpaper"),
+                Some("shiftpaper"),
                 Some(&output),
             );
 

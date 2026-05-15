@@ -67,7 +67,7 @@ impl Renderer {
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                label: Some("depthpaper"),
+                label: Some("shiftpaper"),
                 required_features: wgpu::Features::TEXTURE_FORMAT_16BIT_NORM,
                 required_limits: wgpu::Limits::default(),
                 ..Default::default()
@@ -77,7 +77,7 @@ impl Renderer {
 
         let bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("depthpaper_bgl"),
+                label: Some("shiftpaper_bgl"),
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
@@ -120,19 +120,19 @@ impl Renderer {
 
         let pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("depthpaper_pl"),
+                label: Some("shiftpaper_pl"),
                 bind_group_layouts: &[&bind_group_layout],
                 push_constant_ranges: &[],
             });
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("depthpaper_shader"),
+            label: Some("shiftpaper_shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
         let pipeline =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("depthpaper_rp"),
+                label: Some("shiftpaper_rp"),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
@@ -161,7 +161,7 @@ impl Renderer {
             });
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("depthpaper_sampler"),
+            label: Some("shiftpaper_sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
@@ -242,7 +242,7 @@ impl Renderer {
         uniform_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("depthpaper_bg"),
+            label: Some("shiftpaper_bg"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -324,12 +324,12 @@ impl Renderer {
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = self.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor { label: Some("depthpaper_enc") },
+            &wgpu::CommandEncoderDescriptor { label: Some("shiftpaper_enc") },
         );
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("depthpaper_pass"),
+                label: Some("shiftpaper_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,

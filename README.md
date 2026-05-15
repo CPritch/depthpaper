@@ -1,4 +1,4 @@
-# depthpaper
+# shiftpaper
 
 Parallax wallpaper daemon for Wayland. Uses monocular depth estimation to generate a depth map from any image, then shifts the wallpaper layers based on cursor position. The effect is subtle but satisfying.
 
@@ -8,8 +8,8 @@ Experimental. Built and tested on a single machine (Arch, Hyprland, RTX 5060). E
 
 Two binaries:
 
-- `depthpaper` (CLI) takes a source image, runs Depth Anything V2/V3 inference via ONNX Runtime, and writes a color + 16-bit depth PNG pair to a cache directory.
-- `depthpaperd` (daemon) loads the pre-baked pair and renders a parallax-displaced wallpaper on wlr-layer-shell surfaces using wgpu/Vulkan.
+- `shiftpaper` (CLI) takes a source image, runs Depth Anything V2/V3 inference via ONNX Runtime, and writes a color + 16-bit depth PNG pair to a cache directory.
+- `shiftpaperd` (daemon) loads the pre-baked pair and renders a parallax-displaced wallpaper on wlr-layer-shell surfaces using wgpu/Vulkan.
 
 The daemon has no ML dependencies. All inference happens in the CLI.
 
@@ -30,7 +30,7 @@ cargo install --path crates/daemon
 ## Quick start
 
 ```
-depthpaper set ~/Pictures/wallpaper.jpg --model ~/path/to/depth_anything_v2_small.onnx
+shiftpaper set ~/Pictures/wallpaper.jpg --model ~/path/to/depth_anything_v2_small.onnx
 ```
 
 This bakes the image (first run only), writes the config, and tells you to reload the daemon. The model path is saved to config so you only need `--model` once.
@@ -40,27 +40,27 @@ This bakes the image (first run only), writes the config, and tells you to reloa
 Directly:
 
 ```
-depthpaperd
+shiftpaperd
 ```
 
 As a systemd user service:
 
 ```
-cp depthpaperd.service ~/.config/systemd/user/
+cp shiftpaperd.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now depthpaperd
+systemctl --user enable --now shiftpaperd
 ```
 
 Change wallpapers without restarting:
 
 ```
-depthpaper set ~/Pictures/new_wallpaper.jpg
-systemctl --user reload depthpaperd
+shiftpaper set ~/Pictures/new_wallpaper.jpg
+systemctl --user reload shiftpaperd
 ```
 
 ## Config
 
-Lives at `~/.config/depthpaper/config.toml`. Mostly managed by the CLI but you can edit it by hand.
+Lives at `~/.config/shiftpaper/config.toml`. Mostly managed by the CLI but you can edit it by hand.
 
 ```toml
 [daemon]
@@ -70,10 +70,10 @@ idle_timeout_secs = 300
 battery_threshold = 20          # percent; 0 to disable
 
 [inference]
-model_path = "~/.local/share/depthpaper/models/depth_anything_v2_small.onnx"
+model_path = "~/.local/share/shiftpaper/models/depth_anything_v2_small.onnx"
 
 [wallpaper]
-color = "~/.cache/depthpaper/wallpapers/abc123.color.png"
+color = "~/.cache/shiftpaper/wallpapers/abc123.color.png"
 # depth is inferred from color path; override with:
 # depth = "/path/to/custom.depth16.png"
 ```

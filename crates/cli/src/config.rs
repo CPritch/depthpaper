@@ -26,9 +26,9 @@ pub struct WallpaperConfig {
 
 pub fn config_path() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        PathBuf::from(xdg).join("depthpaper/config.toml")
+        PathBuf::from(xdg).join("shiftpaper/config.toml")
     } else if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".config/depthpaper/config.toml")
+        PathBuf::from(home).join(".config/shiftpaper/config.toml")
     } else {
         PathBuf::from("config.toml")
     }

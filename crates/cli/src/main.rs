@@ -9,13 +9,13 @@ use toml_edit::{value, DocumentMut};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-/// Bake depth maps and configure the depthpaperd parallax wallpaper daemon.
+/// Bake depth maps and configure the shiftpaperd parallax wallpaper daemon.
 #[derive(Parser)]
 #[command(
-    name = "depthpaper",
+    name = "shiftpaper",
     version,
     about,
-    long_about = "depthpaper is the command-line companion to the depthpaperd \
+    long_about = "shiftpaper is the command-line companion to the shiftpaperd \
                   parallax wallpaper daemon. Use it to convert source images \
                   into the color + 16-bit depth pairs the daemon renders, set \
                   the active wallpaper, and switch cursor tracking modes.",
@@ -38,13 +38,13 @@ enum Command {
     Bake {
         /// Source image (jpeg, png, or webp).
         input: PathBuf,
-        /// Output directory. Defaults to the depthpaper cache directory
-        /// at $XDG_CACHE_HOME/depthpaper/wallpapers.
+        /// Output directory. Defaults to the shiftpaper cache directory
+        /// at $XDG_CACHE_HOME/shiftpaper/wallpapers.
         #[arg(short, long)]
         out: Option<PathBuf>,
         /// Path to the Depth Anything ONNX model. Falls back to
-        /// $DEPTHPAPER_MODEL, then [inference] model_path in config.toml.
-        #[arg(short, long, env = "DEPTHPAPER_MODEL")]
+        /// $SHIFTPAPER_MODEL, then [inference] model_path in config.toml.
+        #[arg(short, long, env = "SHIFTPAPER_MODEL")]
         model: Option<PathBuf>,
     },
 
@@ -58,9 +58,9 @@ enum Command {
         /// Source image (jpeg, png, or webp).
         input: PathBuf,
         /// Path to the Depth Anything ONNX model. Falls back to
-        /// $DEPTHPAPER_MODEL, then [inference] model_path in config.toml.
+        /// $SHIFTPAPER_MODEL, then [inference] model_path in config.toml.
         /// When provided, the resolved path is persisted to config.
-        #[arg(short, long, env = "DEPTHPAPER_MODEL")]
+        #[arg(short, long, env = "SHIFTPAPER_MODEL")]
         model: Option<PathBuf>,
     },
 
@@ -108,7 +108,7 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("depthpaper_cli=info")),
+                .unwrap_or_else(|_| EnvFilter::new("shiftpaper_cli=info")),
         )
         .init();
 
@@ -127,7 +127,7 @@ fn main() -> Result<()> {
     }
 }
 
-/// Resolve the model path. Clap merges --model and $DEPTHPAPER_MODEL into
+/// Resolve the model path. Clap merges --model and $SHIFTPAPER_MODEL into
 /// `arg`, so by the time we get here a Some means flag-or-env. If still
 /// None, fall through to config, then error.
 fn resolve_model(arg: Option<PathBuf>) -> Result<PathBuf> {
@@ -138,7 +138,7 @@ fn resolve_model(arg: Option<PathBuf>) -> Result<PathBuf> {
         return Ok(cfg.inference.model_path);
     }
     anyhow::bail!(
-        "no model specified — pass --model, set DEPTHPAPER_MODEL, or add\n\
+        "no model specified — pass --model, set SHIFTPAPER_MODEL, or add\n\
          \n\
          [inference]\n\
          model_path = \"/path/to/depth_anything_v2.onnx\"\n\
@@ -183,8 +183,8 @@ fn set(input: &Path, model: &Path) -> Result<()> {
     update_daemon_config(&paths, model)?;
     eprintln!();
     eprintln!("wallpaper set. reload the daemon to apply:");
-    eprintln!("  systemctl --user reload depthpaperd");
-    eprintln!("  # or: kill -HUP $(pidof depthpaperd)");
+    eprintln!("  systemctl --user reload shiftpaperd");
+    eprintln!("  # or: kill -HUP $(pidof shiftpaperd)");
     Ok(())
 }
 
@@ -195,7 +195,7 @@ fn mode_cmd(mode: Option<TrackingMode>) -> Result<()> {
             eprintln!("tracking mode set to {}", m.as_str());
             eprintln!();
             eprintln!("restart the daemon to apply:");
-            eprintln!("  systemctl --user restart depthpaperd");
+            eprintln!("  systemctl --user restart shiftpaperd");
         }
         None => {
             let current = read_tracking_mode()?;

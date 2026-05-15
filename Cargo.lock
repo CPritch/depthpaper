@@ -404,47 +404,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
-name = "depthpaper-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "blake3",
- "clap",
- "directories",
- "image",
- "ort",
- "serde",
- "toml",
- "toml_edit",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "depthpaper-daemon"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytemuck",
- "calloop",
- "calloop-wayland-source",
- "image",
- "nix",
- "pollster",
- "raw-window-handle",
- "serde",
- "smithay-client-toolkit",
- "toml",
- "tracing",
- "tracing-subscriber",
- "wayland-backend",
- "wayland-client",
- "wayland-protocols",
- "wayland-protocols-wlr",
- "wgpu",
-]
-
-[[package]]
 name = "der"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1621,6 +1580,47 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "shiftpaper-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "clap",
+ "directories",
+ "image",
+ "ort",
+ "serde",
+ "toml",
+ "toml_edit",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "shiftpaper-daemon"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "calloop",
+ "calloop-wayland-source",
+ "image",
+ "nix",
+ "pollster",
+ "raw-window-handle",
+ "serde",
+ "smithay-client-toolkit",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
+ "wgpu",
 ]
 
 [[package]]
