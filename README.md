@@ -4,6 +4,8 @@ Parallax wallpaper daemon for Wayland. Uses monocular depth estimation to genera
 
 Experimental. Built and tested on a single machine (Arch, Hyprland, RTX 5060). Expect rough edges.
 
+![Example Tiger Wallpaper](header.gif)
+
 ## How it works
 
 Two binaries:
