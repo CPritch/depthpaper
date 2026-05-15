@@ -6,7 +6,10 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.cargo/bin/shiftpaperd
+# Resolved from PATH — works for both cargo install (~/.cargo/bin) and
+# packaged installs (/usr/bin). If this fails, add:
+#   Environment="PATH=/usr/bin:%h/.cargo/bin"
+ExecStart=shiftpaperd
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3
