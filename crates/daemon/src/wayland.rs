@@ -7,27 +7,27 @@ use smithay_client_toolkit::{
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::{
-        pointer::{PointerEvent, PointerEventKind, PointerHandler},
         Capability, SeatHandler, SeatState,
+        pointer::{PointerEvent, PointerEventKind, PointerHandler},
     },
     shell::{
+        WaylandSurface,
         wlr_layer::{
             Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
             LayerSurfaceConfigure,
         },
-        WaylandSurface,
     },
     shm::{Shm, ShmHandler},
-};
-use tracing::{debug, info, warn};
-use wayland_client::{
-    globals::GlobalList,
-    protocol::{wl_output, wl_pointer, wl_seat, wl_surface},
-    Connection, Proxy, QueueHandle,
 };
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr::NonNull;
+use tracing::{debug, info, warn};
+use wayland_client::{
+    Connection, Proxy, QueueHandle,
+    globals::GlobalList,
+    protocol::{wl_output, wl_pointer, wl_seat, wl_surface},
+};
 
 use crate::config::{Config, TrackingMode};
 use crate::cursor::CursorPoller;
@@ -76,8 +76,15 @@ impl App {
             CompositorState::bind(globals, qh).context("wl_compositor not available")?;
         let output_state = OutputState::new(globals, qh);
         let seat_state = SeatState::new(globals, qh);
-        let layer_shell =
-            LayerShell::bind(globals, qh).context("wlr-layer-shell not available")?;
+        let layer_shell = LayerShell::bind(globals, qh).map_err(|_| {
+            anyhow::anyhow!(
+                "wlr-layer-shell (zwlr_layer_shell_v1) is not available on this compositor.\n\
+                 \n\
+                 shiftpaperd requires a compositor that supports the wlr-layer-shell protocol.\n\
+                 Supported: Hyprland, Sway, River, Wayfire, niri, labwc\n\
+                 Not supported: GNOME Wayland, KDE Plasma (without third-party patches)"
+            )
+        })?;
         let shm = Shm::bind(globals, qh).context("wl_shm not available")?;
 
         Ok(Self {
@@ -173,7 +180,11 @@ impl App {
                     }
                     Err(e) => {
                         warn!(name = output.name, "reload: failed to load depth: {e:#}");
-                        renderer.create_bind_group(&color_view, &renderer.depth_view, &rt.uniform_buffer)
+                        renderer.create_bind_group(
+                            &color_view,
+                            &renderer.depth_view,
+                            &rt.uniform_buffer,
+                        )
                     }
                 };
 
@@ -203,28 +214,23 @@ impl App {
     /// Hyprland-mode tick: poll the IPC cursor and render every output.
     /// Not called in pointer mode (the timer source is not inserted).
     pub fn tick(&mut self, qh: &QueueHandle<Self>) {
-        if let (Some(cursor), Some(renderer)) = (&mut self.cursor, &self.renderer) {
-            if let Some(output) = self.outputs.first() {
-                let moved = cursor.poll(
-                    0.0, 0.0,
-                    output.width as f32,
-                    output.height as f32,
-                    0.3,
-                );
+        if let (Some(cursor), Some(renderer)) = (&mut self.cursor, &self.renderer)
+            && let Some(output) = self.outputs.first()
+        {
+            let moved = cursor.poll(0.0, 0.0, output.width as f32, output.height as f32, 0.3);
 
-                if moved {
-                    // Write the same value to every output's uniform buffer.
-                    // cursor.rs already smooths so we skip the per-output lerp.
-                    for o in &self.outputs {
-                        let intensity = self.config.intensity_for(&o.name);
-                        if let Some(rt) = self.render_targets.get(&o.name) {
-                            rt.write_uniforms_direct(
-                                &renderer.queue,
-                                cursor.offset_x,
-                                cursor.offset_y,
-                                intensity,
-                            );
-                        }
+            if moved {
+                // Write the same value to every output's uniform buffer.
+                // cursor.rs already smooths so we skip the per-output lerp.
+                for o in &self.outputs {
+                    let intensity = self.config.intensity_for(&o.name);
+                    if let Some(rt) = self.render_targets.get(&o.name) {
+                        rt.write_uniforms_direct(
+                            &renderer.queue,
+                            cursor.offset_x,
+                            cursor.offset_y,
+                            intensity,
+                        );
                     }
                 }
             }
@@ -235,22 +241,22 @@ impl App {
 
     pub fn ensure_layer_surfaces(&mut self, qh: &QueueHandle<Self>) {
         for o in &mut self.outputs {
-            if o.name.is_empty() {
-                if let Some(info) = self.output_state.info(&o.wl_output) {
-                    o.name = info.name.clone().unwrap_or_default();
-                    if let Some(mode) = info.modes.iter().find(|m| m.current) {
-                        o.width = mode.dimensions.0 as u32;
-                        o.height = mode.dimensions.1 as u32;
-                    }
-                    o.scale = info.scale_factor;
-                    debug!(
-                        name = o.name,
-                        w = o.width,
-                        h = o.height,
-                        scale = o.scale,
-                        "filled output info from OutputState"
-                    );
+            if o.name.is_empty()
+                && let Some(info) = self.output_state.info(&o.wl_output)
+            {
+                o.name = info.name.clone().unwrap_or_default();
+                if let Some(mode) = info.modes.iter().find(|m| m.current) {
+                    o.width = mode.dimensions.0 as u32;
+                    o.height = mode.dimensions.1 as u32;
                 }
+                o.scale = info.scale_factor;
+                debug!(
+                    name = o.name,
+                    w = o.width,
+                    h = o.height,
+                    scale = o.scale,
+                    "filled output info from OutputState"
+                );
             }
 
             if !o.name.is_empty() && o.layer_surface.is_none() {
@@ -285,7 +291,9 @@ impl App {
         };
 
         for output in &self.outputs {
-            if !output.configured { continue; }
+            if !output.configured {
+                continue;
+            }
 
             if let Some(render_state) = self.render_targets.get(&output.name) {
                 if let Some(layer) = &output.layer_surface {
@@ -339,7 +347,8 @@ impl CompositorHandler for App {
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _new_transform: wl_output::Transform,
-    ) {}
+    ) {
+    }
 
     fn frame(
         &mut self,
@@ -347,7 +356,8 @@ impl CompositorHandler for App {
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _time: u32,
-    ) {}
+    ) {
+    }
 
     fn surface_enter(
         &mut self,
@@ -355,7 +365,8 @@ impl CompositorHandler for App {
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _output: &wl_output::WlOutput,
-    ) {}
+    ) {
+    }
 
     fn surface_leave(
         &mut self,
@@ -363,7 +374,8 @@ impl CompositorHandler for App {
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
         _output: &wl_output::WlOutput,
-    ) {}
+    ) {
+    }
 }
 
 impl OutputHandler for App {
@@ -462,12 +474,7 @@ impl OutputHandler for App {
 }
 
 impl LayerShellHandler for App {
-    fn closed(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _layer: &LayerSurface,
-    ) {
+    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _layer: &LayerSurface) {
         warn!("layer surface closed by compositor");
     }
 
@@ -493,9 +500,11 @@ impl LayerShellHandler for App {
             }
         }
 
-        let output_idx = match self.outputs.iter().position(|o| {
-            o.layer_surface.as_ref() == Some(layer)
-        }) {
+        let output_idx = match self
+            .outputs
+            .iter()
+            .position(|o| o.layer_surface.as_ref() == Some(layer))
+        {
             Some(i) => i,
             None => {
                 warn!("configure: no matching output for layer surface");
@@ -503,8 +512,12 @@ impl LayerShellHandler for App {
             }
         };
 
-        if w > 0 { self.outputs[output_idx].width = w; }
-        if h > 0 { self.outputs[output_idx].height = h; }
+        if w > 0 {
+            self.outputs[output_idx].width = w;
+        }
+        if h > 0 {
+            self.outputs[output_idx].height = h;
+        }
         self.outputs[output_idx].configured = true;
 
         let output_name = self.outputs[output_idx].name.clone();
@@ -518,12 +531,10 @@ impl LayerShellHandler for App {
             let wl_surface = layer.wl_surface();
             let surface_ptr = wl_surface.id().as_ptr() as *mut c_void;
 
-            let display_handle = WaylandDisplayHandle::new(
-                NonNull::new(display_ptr).expect("null display ptr"),
-            );
-            let window_handle = WaylandWindowHandle::new(
-                NonNull::new(surface_ptr).expect("null surface ptr"),
-            );
+            let display_handle =
+                WaylandDisplayHandle::new(NonNull::new(display_ptr).expect("null display ptr"));
+            let window_handle =
+                WaylandWindowHandle::new(NonNull::new(surface_ptr).expect("null surface ptr"));
 
             let target = wgpu::SurfaceTargetUnsafe::RawHandle {
                 raw_display_handle: RawDisplayHandle::Wayland(display_handle),
@@ -539,7 +550,10 @@ impl LayerShellHandler for App {
             };
 
             let surface_caps = surface.get_capabilities(&renderer.adapter);
-            let alpha_mode = if surface_caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+            let alpha_mode = if surface_caps
+                .alpha_modes
+                .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
+            {
                 wgpu::CompositeAlphaMode::PreMultiplied
             } else {
                 surface_caps.alpha_modes[0]
@@ -602,8 +616,14 @@ impl LayerShellHandler for App {
                 target_offset: (0.0, 0.0),
             };
 
-            self.render_targets.insert(output_name.clone(), render_state);
-            info!(name = output_name, w = output_w, h = output_h, "output initialized");
+            self.render_targets
+                .insert(output_name.clone(), render_state);
+            info!(
+                name = output_name,
+                w = output_w,
+                h = output_h,
+                "output initialized"
+            );
 
             layer.wl_surface().frame(qh, layer.wl_surface().clone());
             layer.wl_surface().commit();
@@ -612,7 +632,12 @@ impl LayerShellHandler for App {
                 rt.config.width = output_w;
                 rt.config.height = output_h;
                 rt.surface.configure(&renderer.device, &rt.config);
-                info!(name = output_name, w = output_w, h = output_h, "reconfigured swapchain");
+                info!(
+                    name = output_name,
+                    w = output_w,
+                    h = output_h,
+                    "reconfigured swapchain"
+                );
             }
         }
     }
@@ -717,10 +742,9 @@ impl PointerHandler for App {
                     let target_x = (x as f32 / output_w) - 0.5;
                     let target_y = (y as f32 / output_h) - 0.5;
                     let intensity = self.config.intensity_for(&output_name);
-                    if let (Some(renderer), Some(rt)) = (
-                        &self.renderer,
-                        self.render_targets.get_mut(&output_name),
-                    ) {
+                    if let (Some(renderer), Some(rt)) =
+                        (&self.renderer, self.render_targets.get_mut(&output_name))
+                    {
                         rt.target_offset = (target_x, target_y);
                         rt.step_and_write(&renderer.queue, intensity);
                     }
