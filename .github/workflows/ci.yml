@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: Check & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      # Build with load-dynamic to avoid downloading libonnxruntime (~200 MB)
+      # during CI. The runtime library is not needed for type-checking.
+      - name: cargo check
+        run: |
+          cargo check -p shiftpaper-cli --no-default-features --features load-dynamic
+          cargo check -p shiftpaper-daemon
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: |
+          cargo clippy -p shiftpaper-cli --no-default-features --features load-dynamic -- -D warnings
+          cargo clippy -p shiftpaper-daemon -- -D warnings

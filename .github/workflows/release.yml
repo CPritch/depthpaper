@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.*'
+
+jobs:
+  build:
+    name: Build release binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      # The CLI uses the default ORT_STRATEGY=download — ort-sys fetches
+      # libonnxruntime at build time and links it statically, producing a
+      # self-contained binary that doesn't need onnxruntime installed.
+      - name: Build CLI (with ONNX Runtime bundled)
+        run: cargo build --release --locked --package shiftpaper-cli
+
+      - name: Build daemon
+        run: cargo build --release --locked --package shiftpaper-daemon
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist
+          tar -czf dist/shiftpaper-${{ github.ref_name }}-x86_64-linux.tar.gz \
+            -C target/release shiftpaper shiftpaperd
+          cp shiftpaperd.service dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/shiftpaper-${{ github.ref_name }}-x86_64-linux.tar.gz
+            dist/shiftpaperd.service
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            ### From tarball
+            ```bash
+            tar -xzf shiftpaper-${{ github.ref_name }}-x86_64-linux.tar.gz
+            install -Dm755 shiftpaper   ~/.local/bin/shiftpaper
+            install -Dm755 shiftpaperd  ~/.local/bin/shiftpaperd
+            install -Dm644 shiftpaperd.service ~/.config/systemd/user/shiftpaperd.service
+            systemctl --user daemon-reload
+            ```
+
+            ### Quick start
+            ```bash
+            shiftpaper fetch-model          # download default depth model
+            shiftpaper set ~/Pictures/wallpaper.jpg
+            systemctl --user enable --now shiftpaperd
+            ```
+
+            ### Arch Linux (AUR)
+            ```bash
+            yay -S shiftpaper-git
+            ```
